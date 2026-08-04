@@ -1,6 +1,7 @@
 CodexPhoneBridge-PC.zip
 CodexPhoneBridge.apk
 android/build/
+android/debug.keystore
 uploads/
 phone-threads.json
 paths.json
