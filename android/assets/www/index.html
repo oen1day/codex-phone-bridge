@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Codex 助手</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="loginView" class="login-view hidden">
+    <div class="login-card">
+      <h1>Codex 助手</h1>
+      <p class="login-tip">输入电脑上显示的访问密码</p>
+      <input id="passwordInput" type="password" placeholder="访问密码" autocomplete="current-password">
+      <button id="loginBtn" class="btn primary">进入</button>
+      <p id="loginError" class="error hidden">密码错误</p>
+    </div>
+  </div>
+
+  <div id="mainView" class="main-view hidden">
+    <div class="app-header">
+      <div class="app-brand"><span class="brand-dot"></span>Codex 助手</div>
+      <div class="app-actions">
+        <button id="refreshBtn" class="icon-btn" title="刷新">⟳</button>
+        <button id="settingsBtn" class="icon-btn" title="设置">⚙</button>
+      </div>
+    </div>
+    <div class="main-body">
+    <div id="sidebar" class="sidebar">
+      <div class="sidebar-head">
+        <button id="newChatBtn" class="btn primary small">＋ 新对话</button>
+        <button id="claimBtn" class="btn ghost small" title="把升级前的旧对话归到本设备">认领旧对话</button>
+        <button id="closeSidebarBtn" class="btn ghost small">收起</button>
+      </div>
+      <div id="threadList" class="thread-list"></div>
+      <div class="sidebar-foot">
+        <div class="quick-config">
+          <input id="shareKeyInput" type="text" placeholder="一键配置密钥">
+          <button id="shareKeyBtn" class="btn primary small">一键配置</button>
+        </div>
+        <div id="statusLine" class="status-line">连接中…</div>
+        <div id="metaLine" class="meta-line"></div>
+      </div>
+    </div>
+
+    <div class="chat">
+      <div class="chat-head">
+        <button id="menuBtn" class="btn ghost small">☰</button>
+        <div class="chat-title" id="chatTitle">新对话</div>
+        <span id="connBadge" class="conn-badge"></span>
+        <span id="connLabel" class="conn-label">连接中</span>
+        <button id="reconnectBtn" class="btn ghost small hidden">重连</button>
+        <button id="interruptBtn" class="btn warn small hidden">停止</button>
+      </div>
+      <div id="messages" class="messages"></div>
+      <div id="eventTrace" class="event-trace hidden"></div>
+      <div id="approvalArea" class="approval-area"></div>
+      <div class="composer">
+        <div id="imagePreviews" class="image-previews"></div>
+        <div class="composer-row">
+          <label class="attach-btn" title="添加图片">🖼
+            <input id="imageInput" type="file" accept="image/*" multiple hidden>
+          </label>
+          <textarea id="inputBox" rows="1" placeholder="给 Codex 发消息…"></textarea>
+          <button id="sendBtn" class="btn primary small">发送</button>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <script src="relay.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,1355 @@
+(function () {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const loginView = $('loginView');
+  const mainView = $('mainView');
+  const threadListEl = $('threadList');
+  const messagesEl = $('messages');
+  const approvalArea = $('approvalArea');
+  const chatTitle = $('chatTitle');
+  const statusLine = $('statusLine');
+  const metaLine = $('metaLine');
+  const inputBox = $('inputBox');
+
+  const APP_VERSION = '5.2';
+  const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
+  const STUCK_IDLE_SEC = 120;
+  const STUCK_TOTAL_SEC = 480;
+  let relayCfg = window.RELAY_CONFIG || null;
+  if (!relayCfg && window.AndroidBridge && window.AndroidBridge.getRelayConfig) {
+    try {
+      const s = window.AndroidBridge.getRelayConfig();
+      if (s) relayCfg = JSON.parse(s);
+    } catch (_) {}
+  }
+  let currentEffort = 'medium';
+  if (relayCfg && relayCfg.effort) {
+    currentEffort = relayCfg.effort;
+  } else if (window.AndroidBridge && window.AndroidBridge.getEffort) {
+    try { currentEffort = window.AndroidBridge.getEffort() || 'medium'; } catch (_) {}
+  }
+  if (!EFFORT_LABELS[currentEffort]) currentEffort = 'medium';
+
+  function getPersistentDeviceId() {
+    if (window.AndroidBridge && window.AndroidBridge.getDeviceId) {
+      try { return window.AndroidBridge.getDeviceId(); } catch (_) {}
+    }
+    let id = localStorage.getItem('codexDeviceId');
+    if (!id) {
+      id = 'web' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      try { localStorage.setItem('codexDeviceId', id); } catch (_) {}
+    }
+    return id;
+  }
+  let relayChannel = null;
+  let relayPending = new Map();
+  let relayRpcId = 0;
+  let relayConnecting = false;
+
+  const state = {
+    threads: [],
+    currentId: null,
+    turnId: null,
+    running: false,
+    blocks: new Map(),   // itemId -> block element
+    approvals: new Map(), // requestId -> card element
+    pendingImages: []
+  };
+  let pinnedIds = new Set();
+  try { pinnedIds = new Set(JSON.parse(localStorage.getItem('pinnedThreads') || '[]')); } catch (_) {}
+
+  let es = null;
+  let turnPollTimer = null;
+  let thinkTimer = null;
+  let turnWatchdog = null;
+  let turnStartAt = 0;
+  let lastTurnActivityAt = 0;
+  let liveReplyId = null;
+  let liveSeq = 0;
+  const replySeen = {};
+
+  // ---------- 通信层（局域网 / 中继） ----------
+  async function lanCall(method, params) {
+    let url, init;
+    const json = () => ({ 'Content-Type': 'application/json' });
+    switch (method) {
+      case 'me':
+        url = '/api/me'; init = { method: 'GET' };
+        break;
+      case 'threads':
+        url = '/api/threads'; init = { method: 'GET' };
+        break;
+      case 'threadCreate':
+        url = '/api/threads'; init = { method: 'POST', headers: json(), body: JSON.stringify(params || {}) };
+        break;
+      case 'threadRead':
+        url = '/api/threads/' + encodeURIComponent(params.threadId); init = { method: 'GET' };
+        break;
+      case 'threadDelete':
+        url = '/api/threads/' + encodeURIComponent(params.threadId); init = { method: 'DELETE' };
+        break;
+      case 'turnStart':
+        url = '/api/threads/' + encodeURIComponent(params.threadId) + '/turns';
+        init = { method: 'POST', headers: json(), body: JSON.stringify({ text: params.text, images: params.images || [] }) };
+        break;
+      case 'interrupt':
+        url = '/api/threads/' + encodeURIComponent(params.threadId) + '/interrupt';
+        init = { method: 'POST', headers: json(), body: JSON.stringify({ turnId: params.turnId }) };
+        break;
+      case 'approve':
+        url = '/api/approve';
+        init = { method: 'POST', headers: json(), body: JSON.stringify({ requestId: params.requestId, decision: params.decision }) };
+        break;
+      default:
+        throw new Error('未知方法: ' + method);
+    }
+    const r = await fetch(url, init);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || '请求失败');
+    return data;
+  }
+
+  function relayCall(method, params) {
+    if (!relayChannel || !relayChannel.ready) return Promise.reject(new Error('中继未连接'));
+    const id = ++relayRpcId;
+    return new Promise((resolve, reject) => {
+      relayPending.set(id, { resolve, reject });
+      relayChannel.send({ type: 'rpc', id, method, params: params || {}, clientId: relayChannel.clientId }).catch(e => {
+        relayPending.delete(id);
+        reject(e);
+      });
+      setTimeout(() => {
+        if (relayPending.has(id)) {
+          relayPending.delete(id);
+          reject(new Error('请求超时: ' + method));
+        }
+      }, 120000);
+    });
+  }
+
+  function rejectPendingRelay(reason) {
+    for (const p of relayPending.values()) {
+      try { p.reject(new Error(reason)); } catch (_) {}
+    }
+    relayPending.clear();
+  }
+
+  function apiCall(method, params) {
+    return relayCfg ? relayCall(method, params) : lanCall(method, params);
+  }
+
+  function onRelayMessage(msg) {
+    if (!msg) return;
+    if (msg.type === 'phone-rpc') {
+      handlePhoneRpc(msg);
+      return;
+    }
+    if (msg.type === 'response') {
+      if (msg.to && relayChannel && msg.to !== relayChannel.clientId) return;
+      const p = relayPending.get(msg.id);
+      if (p) {
+        relayPending.delete(msg.id);
+        if (msg.ok) p.resolve(msg.result);
+        else p.reject(new Error(msg.error || '请求失败'));
+      }
+      return;
+    }
+    if (msg.type === 'event' && msg.payload) {
+      const payload = msg.payload;
+      if (payload.type === 'notification') {
+        handleNotification({ method: payload.method, params: payload.params });
+      } else if (payload.type === 'approval-request') {
+        traceEvent('approval-request');
+        handleApprovalRequest(payload);
+      }
+    }
+  }
+
+  async function handlePhoneRpc(msg) {
+    if (msg.to && relayChannel && msg.to !== relayChannel.clientId) return;
+    const id = msg.id;
+    try {
+      if (msg.method === 'listApps') {
+        let list = [];
+        if (window.AndroidBridge && window.AndroidBridge.getInstalledApps) {
+          const s = window.AndroidBridge.getInstalledApps();
+          list = JSON.parse(s || '[]');
+        }
+        addSystemLine('📱 电脑正在读取手机应用列表…');
+        relayChannel.send({ type: 'phone-rpc-response', id, ok: true, result: { apps: list } }).catch(() => {});
+      } else if (msg.method === 'uninstallApp') {
+        const pkg = (msg.params && msg.params.package) || '';
+        if (!pkg) throw new Error('缺少包名');
+        if (!window.AndroidBridge || !window.AndroidBridge.uninstallApp) throw new Error('当前页面不支持卸载');
+        const r = window.AndroidBridge.uninstallApp(pkg);
+        addSystemLine('📱 电脑请求卸载: ' + pkg + '（请在系统弹窗确认）');
+        relayChannel.send({ type: 'phone-rpc-response', id, ok: true, result: { started: !!r } }).catch(() => {});
+      } else if (msg.method === 'openApp' || msg.method === 'openAppBackground' || msg.method === 'openAppSettings') {
+        const pkg = (msg.params && msg.params.package) || '';
+        if (!pkg) throw new Error('缺少包名');
+        if (!window.AndroidBridge || !window.AndroidBridge[msg.method]) throw new Error('当前页面不支持此操作');
+        const r = window.AndroidBridge[msg.method](pkg);
+        addSystemLine('📱 电脑请求: ' + (msg.method === 'openApp' ? '打开应用 ' + pkg : msg.method === 'openAppBackground' ? '后台打开应用 ' + pkg : '打开应用设置 ' + pkg));
+        relayChannel.send({ type: 'phone-rpc-response', id, ok: true, result: { started: !!r } }).catch(() => {});
+      } else if (msg.method === 'goHome' || msg.method === 'requestIgnoreBattery') {
+        if (!window.AndroidBridge || !window.AndroidBridge[msg.method]) throw new Error('当前页面不支持此操作');
+        const r = window.AndroidBridge[msg.method]();
+        addSystemLine('📱 电脑请求: ' + (msg.method === 'goHome' ? '返回手机桌面' : '打开电池优化设置'));
+        relayChannel.send({ type: 'phone-rpc-response', id, ok: true, result: { started: !!r } }).catch(() => {});
+      } else {
+        throw new Error('未知手机操作: ' + msg.method);
+      }
+    } catch (e) {
+      relayChannel.send({ type: 'phone-rpc-response', id, ok: false, error: (e && e.message) || '操作失败' }).catch(() => {});
+    }
+  }
+
+  async function connectRelay() {
+    if (relayConnecting) return;
+    relayConnecting = true;
+    if (!window.crypto || !window.crypto.subtle) {
+      setStatus('手机浏览器不支持加密', true);
+      showToast('当前手机浏览器不支持加密，请更新系统 WebView 后再试', true);
+      relayConnecting = false;
+      return;
+    }
+    setStatus('正在连接中继…', true);
+    try {
+      const brokers = [];
+      try {
+        const w = localStorage.getItem('workingBroker');
+        if (w) brokers.push(w);
+      } catch (_) {}
+      if (relayCfg && relayCfg.broker) brokers.push(relayCfg.broker);
+      brokers.push('wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt');
+      const seen = new Set();
+      let lastErr = '中继连接失败';
+      relayChannel = null;
+      for (const broker of brokers) {
+        if (seen.has(broker)) continue;
+        seen.add(broker);
+        try {
+          const ch = await tryRelayBroker(broker);
+          relayChannel = ch;
+          try { localStorage.setItem('workingBroker', broker); } catch (_) {}
+          break;
+        } catch (e) {
+          lastErr = (e && e.message) || lastErr;
+        }
+      }
+      if (!relayChannel) throw new Error(lastErr);
+    } catch (e) {
+      setStatus('中继连接失败: ' + e.message, true);
+      showToast('中继连接失败: ' + e.message, true);
+    } finally {
+      relayConnecting = false;
+    }
+  }
+
+  function tryRelayBroker(broker) {
+    return new Promise((resolve, reject) => {
+      const ch = new RelayChannel({
+        broker,
+        roomCode: relayCfg.roomCode,
+        password: relayCfg.password,
+        clientId: 'cb_' + getPersistentDeviceId(),
+        role: 'phone',
+        onMessage: onRelayMessage,
+        onError: (s) => {
+          setStatus('配对异常: ' + s, true);
+          showToast('⚠ ' + s + '：请检查手机里的配对码和访问密码是否与电脑一致', true);
+        },
+        onStatus: (s) => {
+          if (s === 'connected') {
+            if (!ch._resolved) {
+              ch._resolved = true;
+              setStatus('中继已连接');
+              showToast('中继已连接');
+              addSystemLine('中继已连接 · ' + new Date().toLocaleTimeString());
+              testPairing();
+              loadThreads();
+              resolve(ch);
+            }
+          } else {
+            setStatus(s, true);
+            rejectPendingRelay('中继连接断开，正在重连…');
+            if (s.indexOf('失败') >= 0) showToast(s, true);
+          }
+        }
+      });
+      ch.start().catch(e => reject(new Error('无法连接中继服务器: ' + ((e && e.message) || e))));
+      setTimeout(() => {
+        if (!ch._resolved) {
+          try { ch.stop(); } catch (_) {}
+          reject(new Error('中继连接超时'));
+        }
+      }, 15000);
+    });
+  }
+
+  async function testPairing() {
+    try {
+      const r = await Promise.race([
+        relayCall('ping', {}),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('配对测试超时')), 10000))
+      ]);
+      addSystemLine('配对成功 · 电脑端版本 v' + ((r && r.version) || '?'));
+      showToast('配对成功，密码一致 ✓');
+    } catch (e) {
+      if ((e.message || '').indexOf('未知方法') >= 0) {
+        addSystemLine('配对成功 · 通道正常（电脑端版本较旧）');
+        showToast('配对成功，密码一致 ✓');
+      } else {
+        setStatus('配对失败: ' + e.message, true);
+        const tip = '⚠ 配对失败：手机保存的配对码/密码与电脑不一致，请核对电脑窗口显示的值后点「重连」';
+        addSystemLine(tip);
+        showToast(tip, true);
+      }
+    }
+  }
+
+  // ---------- login ----------
+  async function init() {
+    if (relayCfg) {
+      loginView.classList.add('hidden');
+      mainView.classList.remove('hidden');
+      metaLine.textContent = 'v' + APP_VERSION + ' ｜ 中继模式 ｜ 配对码: ' + relayCfg.roomCode + ' ｜ 推理: ' + (EFFORT_LABELS[currentEffort] || currentEffort);
+      $('reconnectBtn').classList.remove('hidden');
+      await connectRelay();
+      loadThreads();
+      return;
+    }
+    try {
+      const r = await fetch('/api/me');
+      const data = await r.json();
+      if (data.ok) {
+        showMain(data);
+      } else {
+        showLogin();
+      }
+    } catch (_) {
+      showLogin();
+    }
+  }
+
+  function showLogin() {
+    loginView.classList.remove('hidden');
+    mainView.classList.add('hidden');
+  }
+
+  function showMain(meta) {
+    loginView.classList.add('hidden');
+    mainView.classList.remove('hidden');
+    metaLine.textContent = 'v' + APP_VERSION + ' ｜ 工作目录: ' + meta.workspace + (meta.model ? ' ｜ 模型: ' + meta.model : '');
+    loadThreads();
+    if (!relayCfg) connectSSE();
+  }
+
+  $('loginBtn').addEventListener('click', async () => {
+    const pw = $('passwordInput').value;
+    $('loginError').classList.add('hidden');
+    try {
+      const r = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw })
+      });
+      if (r.ok) {
+        const meta = await (await fetch('/api/me')).json();
+        showMain(meta);
+      } else {
+        $('loginError').classList.remove('hidden');
+      }
+    } catch (_) {
+      $('loginError').textContent = '连接失败，请确认电脑端软件在运行';
+      $('loginError').classList.remove('hidden');
+    }
+  });
+
+  // ---------- threads ----------
+  async function loadThreads() {
+    try {
+      const data = await apiCall('threads');
+      state.threads = Array.isArray(data) ? data : (data.threads || data.data || []);
+      renderThreads();
+    } catch (e) {
+      setStatus('无法读取会话列表', true);
+      showToast('读取会话列表失败', true);
+    }
+  }
+
+  function renderThreads() {
+    threadListEl.innerHTML = '';
+    if (!state.threads.length) {
+      threadListEl.innerHTML = '<div class="meta-line" style="padding:12px">还没有对话，点“新对话”开始</div>';
+      return;
+    }
+    const sorted = [...state.threads].sort((a, b) => {
+      const ap = pinnedIds.has(a.id) ? 0 : 1;
+      const bp = pinnedIds.has(b.id) ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
+    for (const t of sorted) {
+      const el = document.createElement('div');
+      el.className = 'thread-item' + (t.id === state.currentId ? ' active' : '');
+      const title = t.name || t.title || t.preview || '（无标题）';
+      const time = new Date((t.updatedAt || Date.now()) * 1000).toLocaleString();
+      el.innerHTML = '<div class="t-title">' + (pinnedIds.has(t.id) ? '📌 ' : '') + escapeHtml(title) + '</div><div class="t-time">' + time + '</div>';
+      let longPressed = false;
+      let pressTimer = null;
+      el.addEventListener('click', () => {
+        if (longPressed) { longPressed = false; return; }
+        openThread(t.id);
+      });
+      el.addEventListener('touchstart', (e) => {
+        longPressed = false;
+        pressTimer = setTimeout(() => {
+          longPressed = true;
+          const t0 = e.touches[0];
+          showThreadMenu(t.id, t0.clientX, t0.clientY);
+        }, 500);
+      }, { passive: true });
+      el.addEventListener('touchmove', () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } }, { passive: true });
+      el.addEventListener('touchend', () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } });
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showThreadMenu(t.id, e.clientX, e.clientY);
+      });
+      threadListEl.appendChild(el);
+    }
+  }
+
+  function showThreadMenu(threadId, x, y) {
+    hideThreadMenu();
+    const overlay = document.createElement('div');
+    overlay.className = 'thread-menu-overlay';
+    overlay.addEventListener('touchstart', hideThreadMenu, { passive: true });
+    overlay.addEventListener('click', hideThreadMenu);
+    const menu = document.createElement('div');
+    menu.className = 'thread-menu';
+    const pinned = pinnedIds.has(threadId);
+    const btnPin = document.createElement('button');
+    btnPin.textContent = pinned ? '取消置顶' : '置顶';
+    btnPin.addEventListener('click', () => { togglePin(threadId); hideThreadMenu(); });
+    const btnDel = document.createElement('button');
+    btnDel.textContent = '删除对话';
+    btnDel.classList.add('danger');
+    btnDel.addEventListener('click', () => { hideThreadMenu(); deleteThread(threadId); });
+    menu.appendChild(btnPin);
+    menu.appendChild(btnDel);
+    menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 150)) + 'px';
+    menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 110)) + 'px';
+    document.body.appendChild(overlay);
+    document.body.appendChild(menu);
+  }
+
+  function hideThreadMenu() {
+    const o = document.querySelector('.thread-menu-overlay');
+    if (o) o.remove();
+    const m = document.querySelector('.thread-menu');
+    if (m) m.remove();
+  }
+
+  function togglePin(threadId) {
+    if (pinnedIds.has(threadId)) pinnedIds.delete(threadId);
+    else pinnedIds.add(threadId);
+    try { localStorage.setItem('pinnedThreads', JSON.stringify([...pinnedIds])); } catch (_) {}
+    renderThreads();
+  }
+
+  async function deleteThread(threadId) {
+    try {
+      await apiCall('threadDelete', { threadId });
+      state.threads = state.threads.filter(t => t.id !== threadId);
+      if (state.currentId === threadId) {
+        state.currentId = null;
+        state.turnId = null;
+        state.running = false;
+        stopTurnPolling();
+        stopTurnWatchdog();
+        messagesEl.innerHTML = '';
+        approvalArea.innerHTML = '';
+        state.blocks.clear();
+        chatTitle.textContent = '新对话';
+        setStatus('已连接');
+      }
+      renderThreads();
+    } catch (e) {
+      showToast('删除失败: ' + e.message, true);
+    }
+  }
+
+  async function newThread() {
+    try {
+      const data = await apiCall('threadCreate', {});
+      const thread = data.thread || data;
+      if (thread && thread.id) {
+        await openThread(thread.id);
+        loadThreads();
+      } else {
+        throw new Error(JSON.stringify(data));
+      }
+    } catch (e) {
+      setStatus('创建对话失败: ' + e.message, true);
+      showToast('创建对话失败: ' + e.message, true);
+    }
+  }
+
+  async function openThread(id) {
+    stopTurnPolling();
+    stopTurnWatchdog();
+    liveReplyId = null;
+    state.currentId = id;
+    state.blocks.clear();
+    state.approvals.clear();
+    approvalArea.innerHTML = '';
+    messagesEl.innerHTML = '';
+    const t = state.threads.find(x => x.id === id);
+    chatTitle.textContent = (t && (t.name || t.title || t.preview)) || '对话中…';
+    renderThreads();
+    closeSidebar();
+    try {
+      const data = await apiCall('threadRead', { threadId: id });
+      const thread = data.thread || data;
+      const thName = thread.name || thread.title || thread.preview;
+      if (thName) chatTitle.textContent = thName;
+      if (thread.status && thread.status.type === 'active') {
+        state.running = true;
+        setStatus('正在运行…');
+      } else {
+        state.running = false;
+        setStatus('已连接');
+      }
+      $('interruptBtn').classList.toggle('hidden', !state.running);
+      renderHistory(thread.turns || []);
+      scrollBottom();
+    } catch (e) {
+      setStatus('读取对话失败: ' + e.message, true);
+      showToast('读取对话失败: ' + e.message, true);
+    }
+  }
+
+  function renderHistory(turns) {
+    for (const turn of turns) {
+      for (const item of (turn.items || [])) {
+        renderHistoryItem(item);
+      }
+      if (turn.status === 'inProgress') {
+        state.turnId = turn.id;
+        state.running = true;
+        setStatus('正在运行…');
+      }
+    }
+    updateThinkingIndicator(state.running);
+  }
+
+  function renderHistoryItem(item) {
+    if (item.type === 'userMessage') {
+      let text = '';
+      const images = [];
+      for (const c of (item.content || [])) {
+        if (c.type === 'text') text += c.text;
+        if (c.type === 'localImage' || c.type === 'image') {
+          const w = toWebPath(c.path || c.url);
+          if (w) images.push(w);
+        }
+      }
+      text = text.replace(/\n\n\[系统要求：请始终使用简体中文回复用户。\]$/, '');
+      addUserMessage(text, images);
+      return;
+    }
+    const agentEl = ensureAgentBubble();
+    if (item.type === 'agentMessage') {
+      addBlock(agentEl, { kind: 'text', id: item.id, text: item.text || '' });
+    } else if (item.type === 'commandExecution') {
+      addBlock(agentEl, {
+        kind: 'cmd', id: item.id, label: '正在执行电脑命令…',
+        status: item.status || '', output: item.output || '', command: ''
+      });
+    } else if (item.type === 'fileChange') {
+      const files = (item.files || []).map(f => f.path || f.filePath || '').join(', ');
+      addBlock(agentEl, { kind: 'file', id: item.id, files, status: item.status || '' });
+    } else if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall' || item.type === 'webSearch') {
+      const label = friendlyToolLabel(item);
+      addBlock(agentEl, { kind: 'tool', id: item.id, label, status: item.status || '' });
+    }
+  }
+
+  function friendlyToolLabel(item) {
+    const name = String(item.tool || item.server || item.type || '').toLowerCase();
+    if (name.indexOf('list_phone_apps') >= 0) return '正在读取手机应用列表…';
+    if (name.indexOf('uninstall_phone_app') >= 0) return '正在请求卸载手机应用…';
+    if (name.indexOf('list_mcp_resource') >= 0) return '正在查找可用的手机工具…';
+    if (name.indexOf('exec') >= 0 || name.indexOf('shell') >= 0 || name.indexOf('command') >= 0) return '正在执行电脑命令…';
+    if (name.indexOf('search') >= 0) return '正在搜索…';
+    if (name.indexOf('open_page') >= 0) return '正在打开网页…';
+    if (item.type === 'webSearch') return '正在搜索…';
+    return '正在调用工具…';
+  }
+
+  // ---------- rendering helpers ----------
+  function ensureAgentBubble() {
+    let last = messagesEl.lastElementChild;
+    if (last && last.classList.contains('msg') && last.classList.contains('agent')) return last;
+    const el = document.createElement('div');
+    el.className = 'msg agent';
+    el.innerHTML = '<div class="bubble"></div>';
+    messagesEl.appendChild(el);
+    return el;
+  }
+
+  function addUserMessage(text, images) {
+    const el = document.createElement('div');
+    el.className = 'msg user';
+    let imgs = '';
+    if (images && images.length) {
+      imgs = '<div class="imgs">' + images.map(u => '<img src="' + u + '">').join('') + '</div>';
+    }
+    el.innerHTML = '<div class="wrap">' + imgs + '<div class="bubble">' + escapeHtml(text) + '</div></div>';
+    messagesEl.appendChild(el);
+    scrollBottom();
+  }
+
+  function addBlock(agentEl, data) {
+    const bubble = agentEl.querySelector('.bubble');
+    let block = state.blocks.get(data.id);
+    if (!block) {
+      block = document.createElement('div');
+      block.className = 'block';
+      block.dataset.id = data.id;
+      bubble.appendChild(block);
+      state.blocks.set(data.id, block);
+    }
+    renderBlock(block, data);
+    scrollBottom();
+    return block;
+  }
+
+  function renderBlock(block, d) {
+    if (d.kind === 'text') {
+      block.classList.add('agent-text');
+      if (d.typing) block.classList.add('typing'); else block.classList.remove('typing');
+      block.textContent = d.text || '';
+    } else if (d.kind === 'cmd') {
+      block.className = 'block cmd';
+      block.innerHTML = '<div class="cmd-line">🔧 ' + escapeHtml(d.label || '正在执行电脑命令…') +
+        (d.status ? ' <span class="cmd-status">' + escapeHtml(d.status) + '</span>' : '') + '</div>' +
+        (d.output ? '<pre class="cmd-output">' + escapeHtml(d.output) + '</pre>' : '');
+    } else if (d.kind === 'file') {
+      block.className = 'block file';
+      block.textContent = '📝 修改文件: ' + (d.files || '') + (d.status ? ' ｜ ' + d.status : '');
+    } else if (d.kind === 'tool') {
+      block.className = 'block tool';
+      block.textContent = '🔧 ' + (d.label || d.status || '工具调用');
+    }
+  }
+
+  function scrollBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // ---------- SSE ----------
+  function connectSSE() {
+    if (es) { es.close(); }
+    es = new EventSource('/events');
+    es.onopen = () => setStatus('已连接');
+    es.onerror = () => {
+      setStatus('连接中断，重连中…', true);
+      showToast('与电脑的连接中断，正在重连…', true);
+      setTimeout(connectSSE, 2000);
+    };
+    es.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      if (msg.type === 'notification') handleNotification(msg);
+      else if (msg.type === 'approval-request') handleApprovalRequest(msg);
+    };
+  }
+
+  function handleNotification(msg) {
+    const method = msg.method;
+    const params = msg.params || {};
+    if (!params.threadId) return;
+    if (params.threadId && (!state.currentId || params.threadId !== state.currentId)) return;
+    traceEvent(method);
+    lastTurnActivityAt = Date.now();
+
+    if (method === 'turn/started') {
+      state.turnId = params.turn && params.turn.id;
+      state.running = true;
+      replySeen[state.turnId] = false;
+      setStatus('正在运行…');
+      $('interruptBtn').classList.remove('hidden');
+      turnStartAt = Date.now();
+      lastTurnActivityAt = Date.now();
+      liveReplyId = null;
+      updateThinkingIndicator(true);
+      startTurnPolling();
+      startTurnWatchdog();
+    } else if (method === 'turn/completed') {
+      stopTurnPolling();
+      stopTurnWatchdog();
+      updateThinkingIndicator(false);
+      state.running = false;
+      state.turnId = null;
+      setStatus(params.turn && params.turn.status === 'failed' ? '出错: ' + ((params.turn.error && params.turn.error.message) || '未知错误') : '已完成');
+      $('interruptBtn').classList.add('hidden');
+      for (const b of state.blocks.values()) b.classList.remove('typing');
+      loadThreads();
+      const tid = params.turn && params.turn.id;
+      setTimeout(() => {
+        if (state.turnId && state.turnId !== tid) return;
+        refreshThreadNow();
+      }, 400);
+    } else if (method === 'turn/error') {
+      stopTurnPolling();
+      stopTurnWatchdog();
+      updateThinkingIndicator(false);
+      state.running = false;
+      liveReplyId = null;
+      setStatus('运行出错', true);
+    } else if (method === 'item/started') {
+      const item = params.item || {};
+      onItemStarted(item);
+    } else if (method === 'item/agentMessage/delta') {
+      let bid = params.itemId || liveReplyId;
+      let block = bid ? state.blocks.get(bid) : null;
+      if (!block) {
+        if (!bid) {
+          bid = 'live-' + state.turnId + '-' + (++liveSeq);
+          liveReplyId = bid;
+        }
+        const agentEl = ensureAgentBubble();
+        block = addBlock(agentEl, { kind: 'text', id: bid, text: '', typing: true });
+      }
+      block.classList.add('typing');
+      block.textContent = (block.textContent || '') + deltaText(params);
+      scrollBottom();
+    } else if (method === 'item/commandExecution/outputDelta') {
+      let block = state.blocks.get(params.itemId);
+      if (!block) {
+        const agentEl = ensureAgentBubble();
+        block = addBlock(agentEl, { kind: 'cmd', id: params.itemId, label: '正在执行电脑命令…', status: '进行中', output: '' });
+      }
+      const out = block.querySelector('.out');
+      if (out) {
+        out.textContent += params.delta || '';
+        out.scrollTop = out.scrollHeight;
+      }
+    } else if (method === 'item/completed') {
+      onItemCompleted(params.item || {});
+    }
+  }
+
+  function onItemStarted(item) {
+    if (item.type === 'userMessage') return;
+    const agentEl = ensureAgentBubble();
+    updateThinkingIndicator(true);
+    if (item.type === 'agentMessage') {
+      const block = addBlock(agentEl, { kind: 'text', id: item.id, text: '', typing: true });
+      block.classList.add('typing');
+      liveReplyId = item.id;
+    } else if (item.type === 'commandExecution') {
+      addBlock(agentEl, {
+        kind: 'cmd', id: item.id, label: '正在执行电脑命令…',
+        status: '进行中', output: ''
+      });
+    } else if (item.type === 'fileChange') {
+      const files = (item.files || []).map(f => f.path || '').join(', ');
+      addBlock(agentEl, { kind: 'file', id: item.id, files, status: item.status || 'pending' });
+    } else if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall' || item.type === 'webSearch') {
+      const label = friendlyToolLabel(item);
+      addBlock(agentEl, { kind: 'tool', id: item.id, label, status: '进行中' });
+    }
+  }
+
+  function onItemCompleted(item) {
+    if (item.type === 'userMessage') return;
+    const block = state.blocks.get(item.id);
+    if (!block) {
+      const data = itemToBlockData(item);
+      if (!data) return;
+      const agentEl = ensureAgentBubble();
+      addBlock(agentEl, data);
+      return;
+    }
+    block.classList.remove('typing');
+    if (item.type === 'agentMessage') {
+      const cur = (block.textContent || '').trim();
+      if (item.text && (!cur || item.text.length > cur.length)) block.textContent = item.text;
+      if ((item.text || '').trim()) replySeen[state.turnId] = true;
+      block.classList.add('agent-text');
+    } else if (item.type === 'commandExecution') {
+      renderBlock(block, { kind: 'cmd', id: item.id, label: '正在执行电脑命令…', status: item.status || '', output: item.output || '', command: '' });
+    } else if (item.type === 'fileChange') {
+      const files = (item.files || []).map(f => f.path || '').join(', ');
+      block.className = 'block file';
+      block.textContent = '📝 修改文件: ' + files + (item.status ? ' ｜ ' + item.status : '');
+    } else if (item.type === 'reasoning') {
+      block.className = 'block reason';
+      block.textContent = '💭 ' + (item.summary || item.text || block.textContent.replace(/^💭 /, ''));
+    } else if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall' || item.type === 'webSearch') {
+      block.className = 'block tool';
+      const label = item.type === 'webSearch' ? '搜索: ' + (item.query || '')
+        : (item.type === 'mcpToolCall' ? (item.server || '') + ' → ' + (item.tool || '') : '工具: ' + (item.tool || ''));
+      block.textContent = '🔧 ' + label + (item.status ? ' ｜ ' + item.status : '');
+    }
+    scrollBottom();
+  }
+
+  async function refreshThreadNow() {
+    if (!state.currentId) return;
+    try {
+      const data = await apiCall('threadRead', { threadId: state.currentId });
+      const thread = data.thread || data;
+      state.blocks.clear();
+      state.approvals.clear();
+      approvalArea.innerHTML = '';
+      messagesEl.innerHTML = '';
+      const thName = thread.name || thread.title || thread.preview;
+      if (thName) chatTitle.textContent = thName;
+      if (thread.status && thread.status.type === 'active') {
+        state.running = true;
+        setStatus('正在运行…');
+      } else {
+        state.running = false;
+        setStatus('已连接');
+      }
+      renderHistory(thread.turns || []);
+      scrollBottom();
+      let hasText = false;
+      for (const t of (thread.turns || [])) {
+        for (const item of (t.items || [])) {
+          if ((item.type === 'agentMessage' || item.type === 'reasoning') && ((item.text || item.summary || '')).trim()) { hasText = true; break; }
+        }
+        if (hasText) break;
+      }
+      if (!hasText) addSystemLine('⚠ 本轮已完成，但没收到回复内容（请把电脑窗口的文字发给我）');
+    } catch (_) {}
+  }
+
+  function refreshThreadFromData(thread) {
+    state.blocks.clear();
+    state.approvals.clear();
+    approvalArea.innerHTML = '';
+    messagesEl.innerHTML = '';
+    const thName = thread.name || thread.title || thread.preview;
+    if (thName) chatTitle.textContent = thName;
+    if (thread.status && thread.status.type === 'active') {
+      state.running = true;
+      setStatus('正在运行…');
+    } else {
+      state.running = false;
+      setStatus('已连接');
+    }
+    $('interruptBtn').classList.toggle('hidden', !state.running);
+    renderHistory(thread.turns || []);
+    scrollBottom();
+    updateThinkingIndicator(state.running);
+  }
+
+  function startTurnPolling() {
+    stopTurnPolling();
+    turnPollTimer = setInterval(async () => {
+      if (!state.currentId || !state.running) {
+        stopTurnPolling();
+        return;
+      }
+      try {
+        const data = await apiCall('threadRead', { threadId: state.currentId });
+        const thread = data.thread || data;
+        const turns = thread.turns || [];
+        const targetTurnId = state.turnId;
+        let target = null;
+        if (targetTurnId) target = turns.find(t => t.id === targetTurnId) || null;
+        if (!target && turns.length) target = turns[turns.length - 1];
+        if (!target) return;
+        const threadIdle = !(thread.status && thread.status.type === 'active');
+        const turnDone = threadIdle || (target.status && target.status !== 'inProgress');
+        if (!turnDone) return;
+        stopTurnPolling();
+        const doneId = target.id;
+        if (!replySeen[doneId]) {
+          replySeen[doneId] = true;
+          refreshThreadFromData(thread);
+        }
+      } catch (_) {}
+    }, 1800);
+  }
+
+  function stopTurnPolling() {
+    if (turnPollTimer) {
+      clearInterval(turnPollTimer);
+      turnPollTimer = null;
+    }
+  }
+
+  function startTurnWatchdog() {
+    stopTurnWatchdog();
+    turnWatchdog = setInterval(() => {
+      if (!state.running || !state.currentId) {
+        stopTurnWatchdog();
+        return;
+      }
+      const now = Date.now();
+      const idleSec = Math.floor((now - lastTurnActivityAt) / 1000);
+      const totalSec = Math.floor((now - turnStartAt) / 1000);
+      if (idleSec > STUCK_IDLE_SEC || totalSec > STUCK_TOTAL_SEC) {
+        stopTurnWatchdog();
+        stopTurnPolling();
+        setStatus('思考超时，正在自动停止…', true);
+        addSystemLine('⚠ 思考超过时限，已自动停止。可调低推理强度后重试，或点右上角「停止」。');
+        if (state.turnId) {
+          apiCall('interrupt', { threadId: state.currentId, turnId: state.turnId }).then(() => {
+            setStatus('已超时终止', true);
+          }).catch(() => {});
+        }
+      }
+    }, 10000);
+  }
+
+  function stopTurnWatchdog() {
+    if (turnWatchdog) {
+      clearInterval(turnWatchdog);
+      turnWatchdog = null;
+    }
+  }
+
+  function updateThinkingIndicator(show) {
+    const all = messagesEl.querySelectorAll('.think-indicator');
+    for (const i of all) i.classList.add('hidden');
+    if (!show) {
+      clearThinkTimer();
+      return;
+    }
+    const els = messagesEl.querySelectorAll('.msg.agent');
+    if (!els.length) return;
+    const el = els[els.length - 1];
+    let ind = el.querySelector('.think-indicator');
+    if (!ind) {
+      ind = document.createElement('div');
+      ind.className = 'think-indicator';
+      ind.dataset.started = String(Date.now());
+      ind.innerHTML = '<span class="spin"></span><span class="think-text">正在思考…</span>';
+      const bubble = el.querySelector('.bubble');
+      if (bubble) bubble.appendChild(ind);
+    }
+    ind.classList.remove('hidden');
+    updateThinkTimes();
+    if (!thinkTimer) thinkTimer = setInterval(updateThinkTimes, 1000);
+  }
+
+  function updateThinkTimes() {
+    let any = false;
+    const all = messagesEl.querySelectorAll('.think-indicator:not(.hidden)');
+    for (const ind of all) {
+      any = true;
+      const sec = Math.floor((Date.now() - Number(ind.dataset.started || Date.now())) / 1000);
+      const t = ind.querySelector('.think-text');
+      if (t) t.textContent = '正在思考… ' + sec + '秒' + (sec >= 120 ? '（较久，可点右上角停止）' : '');
+    }
+    if (!any) clearThinkTimer();
+  }
+
+  function clearThinkTimer() {
+    if (thinkTimer) {
+      clearInterval(thinkTimer);
+      thinkTimer = null;
+    }
+  }
+
+  function itemToBlockData(item) {
+    if (item.type === 'userMessage') return null;
+    if (item.type === 'agentMessage') return { kind: 'text', id: item.id, text: item.text || '' };
+    if (item.type === 'commandExecution') return {
+      kind: 'cmd', id: item.id, label: '正在执行电脑命令…',
+      status: item.status || '', output: item.output || '', command: ''
+    };
+    if (item.type === 'fileChange') return {
+      kind: 'file', id: item.id,
+      files: (item.files || []).map(f => f.path || '').join(', '), status: item.status || ''
+    };
+    if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall' || item.type === 'webSearch') {
+      return { kind: 'tool', id: item.id, label: friendlyToolLabel(item), status: item.status || '' };
+    }
+    return null;
+  }
+
+  // ---------- approvals ----------
+  function handleApprovalRequest(msg) {
+    const p = msg.params || {};
+    if (!state.currentId) return;
+    if (p.threadId && p.threadId !== state.currentId) return;
+    const cmd = Array.isArray(p.command) ? p.command.join(' ') : (p.command || '');
+    const card = document.createElement('div');
+    card.className = 'approval-card';
+    card.innerHTML =
+      '<div class="a-title">需要批准</div>' +
+      (cmd ? '<div class="a-cmd">' + escapeHtml(cmd) + '</div>' : '') +
+      (p.cwd ? '<div class="a-cmd" style="margin-bottom:8px">目录: ' + escapeHtml(p.cwd) + '</div>' : '') +
+      (p.reason ? '<div style="font-size:12px;color:#c9a86a;margin-bottom:8px">原因: ' + escapeHtml(p.reason) + '</div>' : '') +
+      '<div class="a-btns">' +
+      '<button data-d="accept" class="btn primary">允许一次</button>' +
+      '<button data-d="acceptForSession" class="btn">本次会话允许</button>' +
+      '<button data-d="decline" class="btn warn">拒绝</button>' +
+      '<button data-d="cancel" class="btn ghost">停止</button>' +
+      '</div>';
+    card.querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => approve(msg.requestId, b.dataset.d, card));
+    });
+    approvalArea.appendChild(card);
+    state.approvals.set(msg.requestId, card);
+    setStatus('等待你批准…');
+  }
+
+  async function approve(requestId, decision, card) {
+    try {
+      await apiCall('approve', { requestId, decision });
+      if (card && card.parentNode) card.parentNode.removeChild(card);
+      state.approvals.delete(requestId);
+    } catch (e) {
+      showToast('提交失败: ' + e.message, true);
+    }
+  }
+
+  // ---------- send ----------
+  async function send() {
+    const text = inputBox.value.trim();
+    const images = state.pendingImages.slice();
+    if (!text && !images.length) return;
+    inputBox.value = '';
+    state.pendingImages = [];
+    renderImagePreviews();
+
+    if (relayCfg && (!relayChannel || !relayChannel.ready)) {
+      showToast('中继未连接：请点右上角「重连」按钮', true);
+      return;
+    }
+    if (!state.currentId) {
+      showToast('正在创建对话…');
+      await newThread();
+      if (!state.currentId) {
+        showToast('创建对话失败，请重试', true);
+        return;
+      }
+    }
+    addUserMessage(text, images.map(i => i.dataUrl));
+
+    try {
+      const data = await apiCall('turnStart', {
+        threadId: state.currentId,
+        text,
+        images: images.map(i => ({ name: i.name, data: i.dataUrl })),
+        effort: currentEffort
+      });
+      const turn = data.turn || data;
+      if (turn && turn.id) {
+        state.turnId = turn.id;
+        state.running = true;
+        replySeen[turn.id] = false;
+        setStatus('正在运行…');
+        $('interruptBtn').classList.remove('hidden');
+        turnStartAt = Date.now();
+        lastTurnActivityAt = Date.now();
+        liveReplyId = null;
+        updateThinkingIndicator(true);
+        startTurnPolling();
+        startTurnWatchdog();
+      }
+      loadThreads();
+    } catch (e) {
+      setStatus('发送失败: ' + e.message, true);
+      showToast('发送失败: ' + e.message, true);
+    }
+  }
+
+  async function interrupt() {
+    if (!state.currentId || !state.turnId) return;
+    try {
+      await apiCall('interrupt', { threadId: state.currentId, turnId: state.turnId });
+      setStatus('已请求停止');
+    } catch (e) {
+      const emsg = (e && e.message) || '';
+      if (/no active turn/i.test(emsg)) {
+        stopTurnPolling();
+        stopTurnWatchdog();
+        state.running = false;
+        state.turnId = null;
+        updateThinkingIndicator(false);
+        $('interruptBtn').classList.add('hidden');
+        setStatus('已停止（当前没有正在运行的任务）');
+        refreshThreadNow();
+        return;
+      }
+      setStatus('停止失败: ' + e.message, true);
+      showToast('停止失败: ' + e.message, true);
+    }
+  }
+
+  // ---------- image attach ----------
+  $('imageInput').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    for (const f of files) {
+      try {
+        const dataUrl = await compressImage(f);
+        state.pendingImages.push({ name: f.name, dataUrl });
+      } catch (_) {}
+    }
+    renderImagePreviews();
+  });
+
+  function compressImage(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = reject;
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = reject;
+        img.onload = () => {
+          const max = 1280;
+          let w = img.width, h = img.height;
+          if (w > max || h > max) {
+            const scale = max / Math.max(w, h);
+            w = Math.round(w * scale); h = Math.round(h * scale);
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderImagePreviews() {
+    const box = $('imagePreviews');
+    box.innerHTML = '';
+    state.pendingImages.forEach((img, i) => {
+      const d = document.createElement('div');
+      d.className = 'thumb';
+      d.innerHTML = '<img src="' + img.dataUrl + '"><span class="x">×</span>';
+      d.querySelector('.x').addEventListener('click', () => {
+        state.pendingImages.splice(i, 1);
+        renderImagePreviews();
+      });
+      box.appendChild(d);
+    });
+  }
+
+  // ---------- misc ----------
+  function setStatus(text, err) {
+    statusLine.textContent = text;
+    statusLine.className = 'status-line ' + (err ? 'err' : 'ok');
+    updateBadge(err ? 'err' : 'ok');
+  }
+
+  function updateBadge(state) {
+    const b = $('connBadge');
+    if (!b) return;
+    b.className = 'conn-badge ' + state;
+    const l = $('connLabel');
+    if (l) {
+      l.textContent = state === 'ok' ? '已连接' : (state === 'err' ? '出错' : '连接中');
+    }
+  }
+
+  function showToast(text, isError) {
+    const t = document.createElement('div');
+    t.className = 'toast-overlay' + (isError ? ' err' : '');
+    t.textContent = text;
+    document.body.appendChild(t);
+    setTimeout(() => {
+      if (t.parentNode) t.parentNode.removeChild(t);
+    }, 4000);
+  }
+
+  function addSystemLine(text) {
+    const el = document.createElement('div');
+    el.className = 'system-line';
+    el.textContent = text;
+    messagesEl.appendChild(el);
+    scrollBottom();
+  }
+
+  function traceEvent(name) {
+    const el = $('eventTrace');
+    if (!el) return;
+    el.classList.remove('hidden');
+    const arr = (el.dataset.list || '').split(',').filter(Boolean);
+    arr.push(name);
+    if (arr.length > 6) arr.shift();
+    el.dataset.list = arr.join(',');
+    el.textContent = '事件: ' + arr.join(' → ');
+  }
+
+  function deltaText(params) {
+    if (params.delta) return params.delta;
+    if (params.deltaBase64) {
+      try {
+        const bin = atob(params.deltaBase64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new TextDecoder().decode(bytes);
+      } catch (_) {}
+    }
+    return '';
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function toWebPath(p) {
+    if (!p) return null;
+    const m = /[\\/]uploads[\\/]([^\\/]+)$/i.exec(p);
+    return m ? '/uploads/' + m[1] : null;
+  }
+
+  function openSidebar() { $('sidebar').classList.add('open'); }
+  function closeSidebar() { $('sidebar').classList.remove('open'); }
+
+  $('menuBtn').addEventListener('click', openSidebar);
+  $('closeSidebarBtn').addEventListener('click', closeSidebar);
+  $('newChatBtn').addEventListener('click', newThread);
+  $('claimBtn').addEventListener('click', async () => {
+    try {
+      const r = await apiCall('claimLegacyThreads', {});
+      showToast('已认领 ' + ((r && r.claimed) || 0) + ' 个旧对话');
+      loadThreads();
+    } catch (e) {
+      showToast('认领失败: ' + e.message, true);
+    }
+  });
+  if (!relayCfg) $('claimBtn').classList.add('hidden');
+  $('sendBtn').addEventListener('click', send);
+  $('interruptBtn').addEventListener('click', interrupt);
+  $('shareKeyBtn').addEventListener('click', quickConfig);
+  $('refreshBtn').addEventListener('click', () => location.reload());
+  if (window.AndroidBridge && window.AndroidBridge.openSettings) {
+    $('settingsBtn').addEventListener('click', () => window.AndroidBridge.openSettings());
+  } else {
+    $('settingsBtn').classList.add('hidden');
+  }
+  $('reconnectBtn').addEventListener('click', async () => {
+    if (relayChannel) {
+      try { relayChannel.stop(); } catch (_) {}
+      relayChannel = null;
+    }
+    showToast('正在重新连接…');
+    await connectRelay();
+  });
+
+  async function quickConfig() {
+    const key = $('shareKeyInput').value.trim();
+    if (!key) { showToast('请输入一键配置密钥', true); return; }
+    if (!window.crypto || !window.crypto.subtle) { showToast('当前环境不支持加密', true); return; }
+    showToast('正在向电脑请求配置…');
+    const enc = new TextEncoder();
+    let ch = null;
+    try {
+      const keyDigest = await crypto.subtle.digest('SHA-256', enc.encode(key));
+      const hashHex = Array.from(new Uint8Array(keyDigest)).map(b => b.toString(16).padStart(2, '0')).join('');
+      const aesKeyBuf = await crypto.subtle.digest('SHA-256', enc.encode('codexbridge:' + key));
+      const aesKey = await crypto.subtle.importKey('raw', aesKeyBuf, { name: 'AES-GCM' }, false, ['decrypt']);
+      const brokers = [];
+      if (relayCfg && relayCfg.broker) brokers.push(relayCfg.broker);
+      brokers.push('wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt');
+      const seenBrokers = new Set();
+      let cfg = null;
+      let lastErr = '电脑端无响应（请确认桥接已启动，且密钥与电脑端显示的一致）';
+      for (const broker of brokers) {
+        if (seenBrokers.has(broker)) continue;
+        seenBrokers.add(broker);
+        try {
+          cfg = await new Promise((resolve, reject) => {
+            let ch = null;
+            const timer = setTimeout(() => {
+              try { if (ch) ch.stop(); } catch (_) {}
+              reject(new Error('timeout'));
+            }, 15000);
+            ch = new RelayChannel({
+              broker,
+              roomCode: 'CODEXXBOOT',
+              password: 'bootstrap-public',
+              clientId: 'cb_' + getPersistentDeviceId(),
+              role: 'phone',
+              onMessage: async (m) => {
+                if (m && m.type === 'bootstrap-ok' && m.data) {
+                  try {
+                    const raw = atob(m.data);
+                    const bytes = new Uint8Array(raw.length);
+                    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+                    const iv = bytes.slice(0, 12);
+                    const tag = bytes.slice(12, 28);
+                    const ct = bytes.slice(28);
+                    const combined = new Uint8Array(ct.length + tag.length);
+                    combined.set(ct, 0);
+                    combined.set(tag, ct.length);
+                    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, combined);
+                    const parsed = JSON.parse(new TextDecoder().decode(pt));
+                    clearTimeout(timer);
+                    try { if (ch) ch.stop(); } catch (_) {}
+                    resolve(parsed);
+                  } catch (e) {
+                    clearTimeout(timer);
+                    try { if (ch) ch.stop(); } catch (_) {}
+                    reject(new Error('配置解析失败'));
+                  }
+                }
+              },
+              onStatus: (s) => {
+                if (s === 'connected' && ch) {
+                  ch.send({ type: 'bootstrap', hash: hashHex }).catch(() => {});
+                }
+              },
+              onError: () => {}
+            });
+            ch.start().catch(e => {
+              clearTimeout(timer);
+              reject(new Error((e && e.message) || '连接失败'));
+            });
+          });
+          break;
+        } catch (e) {
+          if ((e && e.message) !== '配置解析失败') lastErr = (e && e.message) || lastErr;
+        }
+      }
+      if (!cfg) throw new Error(lastErr);
+      if (window.AndroidBridge && window.AndroidBridge.saveRelayConfig) {
+        window.AndroidBridge.saveRelayConfig(cfg.room, cfg.password, cfg.updateUrl, cfg.broker);
+        showToast('配置成功，正在连接…');
+      } else {
+        showToast('配置成功：配对码=' + cfg.room + ' 密码=' + cfg.password);
+      }
+    } catch (e) {
+      showToast('一键配置失败: ' + e.message, true);
+    }
+  }
+  window.addEventListener('error', (e) => {
+    showToast('页面错误: ' + (e.message || '未知错误'), true);
+  });
+  setInterval(() => {
+    if (relayCfg && relayChannel && !relayChannel.ready && !relayConnecting) {
+      connectRelay();
+    }
+  }, 3000);
+  inputBox.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+  inputBox.addEventListener('input', () => {
+    inputBox.style.height = 'auto';
+    inputBox.style.height = Math.min(inputBox.scrollHeight, 120) + 'px';
+  });
+
+  init();
+})();

@@ -1,0 +1,9 @@
+CodexPhoneBridge-PC.zip
+CodexPhoneBridge.apk
+android/build/
+uploads/
+phone-threads.json
+paths.json
+config.json
+make-release-zip.ps1
+.release-stage/

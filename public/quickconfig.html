@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>一键配置</title>
+  <style>
+    body { margin:0; background:#0f1115; color:#e6edf7; font-family:sans-serif;
+      display:flex; align-items:center; justify-content:center; height:100vh; }
+    #msg { font-size:16px; text-align:center; padding:24px; }
+  </style>
+</head>
+<body>
+  <div id="msg">正在向电脑请求配置…</div>
+  <script src="relay.js"></script>
+  <script>
+    (function () {
+      function bridge() { return window.AndroidBridge; }
+      var key = '';
+      try { key = bridge().getPendingKey() || ''; } catch (e) {}
+      if (!key) {
+        document.getElementById('msg').textContent = '没有密钥';
+        if (bridge()) bridge().quickConfigDone(false, '没有密钥');
+        return;
+      }
+      var enc = new TextEncoder();
+      (async function () {
+        var finished = false;
+        function fail(msg) {
+          if (finished) return;
+          finished = true;
+          document.getElementById('msg').textContent = msg;
+          if (bridge()) bridge().quickConfigDone(false, msg);
+        }
+        function ok(cfg) {
+          if (finished) return;
+          finished = true;
+          document.getElementById('msg').textContent = '配置成功';
+          if (bridge()) bridge().quickConfigSuccess(cfg.room, cfg.password, cfg.updateUrl || '', cfg.broker || '');
+        }
+        function tryBootstrap(broker, hashHex, aesKey) {
+          return new Promise(function (resolve) {
+            var ch = null;
+            var done = false;
+            var timer = setTimeout(function () { finish(null); }, 15000);
+            function finish(cfg) {
+              if (done) return;
+              done = true;
+              clearTimeout(timer);
+              try { if (ch) ch.stop(); } catch (e) {}
+              resolve(cfg);
+            }
+            ch = new RelayChannel({
+              broker: broker,
+              roomCode: 'CODEXXBOOT',
+              password: 'bootstrap-public',
+              role: 'phone',
+              clientId: 'cb_' + ((bridge() && bridge().getDeviceId) ? bridge().getDeviceId() : Date.now()),
+              onMessage: async function (m) {
+                if (m && m.type === 'bootstrap-ok' && m.data) {
+                  try {
+                    var raw = atob(m.data);
+                    var bytes = new Uint8Array(raw.length);
+                    for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+                    var iv = bytes.slice(0, 12);
+                    var tag = bytes.slice(12, 28);
+                    var ct = bytes.slice(28);
+                    var combined = new Uint8Array(ct.length + tag.length);
+                    combined.set(ct, 0);
+                    combined.set(tag, ct.length);
+                    var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, aesKey, combined);
+                    var parsed = JSON.parse(new TextDecoder().decode(pt));
+                    finish(parsed);
+                  } catch (e) {
+                    finish(null);
+                  }
+                }
+              },
+              onStatus: function (s) {
+                if (s === 'connected' && ch) {
+                  ch.send({ type: 'bootstrap', hash: hashHex }).catch(function () {});
+                }
+              },
+              onError: function () {}
+            });
+            ch.start().catch(function () { finish(null); });
+          });
+        }
+        try {
+          var keyDigest = await crypto.subtle.digest('SHA-256', enc.encode(key));
+          var hashHex = Array.prototype.map.call(new Uint8Array(keyDigest), function (b) {
+            return b.toString(16).padStart(2, '0');
+          }).join('');
+          var aesBuf = await crypto.subtle.digest('SHA-256', enc.encode('codexbridge:' + key));
+          var aesKey = await crypto.subtle.importKey('raw', aesBuf, { name: 'AES-GCM' }, false, ['decrypt']);
+          var brokers = [
+            'wss://broker.emqx.io:8084/mqtt',
+            'wss://broker.hivemq.com:8884/mqtt',
+            'wss://test.mosquitto.org:8081/mqtt'
+          ];
+          var seen = {};
+          for (var bi = 0; bi < brokers.length; bi++) {
+            var broker = brokers[bi];
+            if (seen[broker]) continue;
+            seen[broker] = true;
+            var cfg = await tryBootstrap(broker, hashHex, aesKey);
+            if (cfg) { ok(cfg); return; }
+          }
+          fail('电脑端无响应（请确认桥接已启动，且密钥与电脑端显示的一致）');
+        } catch (e) {
+          fail('配置失败: ' + (e && e.message ? e.message : e));
+        }
+      })();
+    })();
+  </script>
+</body>
+</html>
