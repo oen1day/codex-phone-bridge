@@ -143,12 +143,13 @@ try {
 }
 
 # 发布 Release 并上传两个安装包
+$notes = "鳍点AI v$version`n`n初，帝以一手机起家，夜召 AI 谋事，遂有天下。然，天下未定，亦未一统；不求独坐江山，惟愿人民安康富庶。"
 Write-Host '发布 Release ...'
 $zipFile = Join-Path $root 'CodexPhoneBridge-PC.zip'
 $apkFile = Join-Path $root 'CodexPhoneBridge.apk'
 if (-not (Test-Path $zipFile)) { throw '生成压缩包失败' }
 if (-not (Test-Path $apkFile)) { throw '找不到 CodexPhoneBridge.apk' }
-if ((Invoke-Gh @('release', 'create', $tag, $zipFile, $apkFile, '--repo', "$user/$repo", '--title', $tag, '--notes', "鳍点AI v$version")) -ne 0) {
+if ((Invoke-Gh @('release', 'create', $tag, $zipFile, $apkFile, '--repo', "$user/$repo", '--title', $tag, '--notes', $notes)) -ne 0) {
   Write-Host "Release $tag 已存在，尝试覆盖上传新文件 ..."
   if ((Invoke-Gh @('release', 'upload', $tag, $zipFile, $apkFile, '--repo', "$user/$repo", '--clobber')) -ne 0) {
     throw "发布/覆盖 Release 失败：请到网页删除 $tag 后重试"

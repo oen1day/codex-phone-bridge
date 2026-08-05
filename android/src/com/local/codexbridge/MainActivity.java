@@ -12,6 +12,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.Typeface;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -28,6 +29,7 @@ import android.telephony.TelephonyManager;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -41,6 +43,7 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -67,7 +70,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_DEVICE_STATUS = "cap_device_status";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.2";
+    private static final String APP_VERSION = "10.3";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -573,6 +576,19 @@ public class MainActivity extends Activity {
         save.setTextColor(Color.parseColor("#06231C"));
         root.addView(save, lp());
 
+        final TextView aboutRow = new TextView(this);
+        aboutRow.setText("关于本软件");
+        aboutRow.setTextColor(Color.parseColor("#E6EDF3"));
+        aboutRow.setGravity(Gravity.CENTER);
+        aboutRow.setBackground(roundedBg(Color.parseColor("#151A23"), Color.parseColor("#4000D2A0"), 12f));
+        aboutRow.setPadding(0, 12, 0, 12);
+        LinearLayout.LayoutParams aboutLp = lp();
+        aboutLp.topMargin = 10;
+        aboutRow.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showAboutDialog(); }
+        });
+        root.addView(aboutRow, aboutLp);
+
         final Runnable applyMode = new Runnable() {
             @Override
             public void run() {
@@ -880,6 +896,138 @@ public class MainActivity extends Activity {
                 .setTitle("连接设置")
                 .create();
         dlg.setView(buildSetupForm(initial, false, dlg));
+        dlg.show();
+    }
+
+    private void showAboutDialog() {
+        final LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.setPadding(48, 40, 48, 40);
+        root.setBackgroundColor(Color.parseColor("#11141D"));
+
+        final ImageView icon = new ImageView(this);
+        int iconId = getResources().getIdentifier("ic_launcher", "drawable", getPackageName());
+        if (iconId != 0) icon.setImageResource(iconId);
+        LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(96, 96);
+        iconLp.bottomMargin = 12;
+        root.addView(icon, iconLp);
+
+        final TextView ver = new TextView(this);
+        ver.setText("v" + APP_VERSION);
+        ver.setTextColor(Color.parseColor("#8B949E"));
+        ver.setTypeface(Typeface.MONOSPACE);
+        ver.setTextSize(12);
+        ver.setGravity(Gravity.CENTER);
+        root.addView(ver, lp());
+
+        TextView quote = new TextView(this);
+        quote.setText("初，帝以一手机起家，\n夜召 AI 谋事，遂有天下。\n然，天下未定，亦未一统；\n不求独坐江山，惟愿人民安康富庶。");
+        quote.setTextColor(Color.parseColor("#E6EDF3"));
+        quote.setTextSize(15);
+        quote.setLineSpacing(0, 1.8f);
+        quote.setGravity(Gravity.CENTER);
+        quote.setPadding(0, 22, 0, 22);
+        root.addView(quote, lp());
+
+        View divider = new View(this);
+        divider.setBackgroundColor(Color.parseColor("#2600D2A0"));
+        root.addView(divider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
+
+        TextView link = new TextView(this);
+        link.setText("github.com/oen1day/codex-phone-bridge");
+        link.setTextColor(Color.parseColor("#00D2A0"));
+        link.setTextSize(13);
+        link.setGravity(Gravity.CENTER);
+        link.setPadding(0, 18, 0, 0);
+        link.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try {
+                    Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/oen1day/codex-phone-bridge"));
+                    startActivity(i);
+                } catch (Exception ignored) {}
+            }
+        });
+        root.addView(link, lp());
+
+        final Handler h = new Handler(Looper.getMainLooper());
+        final Runnable openHidden = new Runnable() {
+            @Override public void run() {
+                showHiddenDialog();
+            }
+        };
+        View.OnTouchListener hold3s = new View.OnTouchListener() {
+            @Override public boolean onTouch(View v, MotionEvent ev) {
+                if (ev.getAction() == MotionEvent.ACTION_DOWN) {
+                    h.postDelayed(openHidden, 3000);
+                } else if (ev.getAction() == MotionEvent.ACTION_UP || ev.getAction() == MotionEvent.ACTION_CANCEL) {
+                    h.removeCallbacks(openHidden);
+                }
+                return false;
+            }
+        };
+        View.OnClickListener tapVersion = new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                Toast.makeText(MainActivity.this, "鳍点AI v" + APP_VERSION, Toast.LENGTH_SHORT).show();
+            }
+        };
+        ver.setOnClickListener(tapVersion);
+        icon.setOnClickListener(tapVersion);
+        ver.setOnTouchListener(hold3s);
+        icon.setOnTouchListener(hold3s);
+
+        final AlertDialog dlg = new AlertDialog.Builder(this).setView(root).create();
+        dlg.show();
+    }
+
+    private void showHiddenDialog() {
+        final LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.setPadding(48, 36, 48, 36);
+        root.setBackgroundColor(Color.parseColor("#11141D"));
+
+        TextView title = new TextView(this);
+        title.setText("鳍点AI · 来历");
+        title.setTextColor(Color.parseColor("#00D2A0"));
+        title.setTextSize(18);
+        title.setGravity(Gravity.CENTER);
+        root.addView(title, lp());
+
+        TextView quote = new TextView(this);
+        quote.setText("初，帝以一手机起家，\n夜召 AI 谋事，遂有天下。\n然，天下未定，亦未一统；\n不求独坐江山，惟愿人民安康富庶。");
+        quote.setTextColor(Color.parseColor("#E6EDF3"));
+        quote.setTextSize(15);
+        quote.setLineSpacing(0, 1.8f);
+        quote.setGravity(Gravity.CENTER);
+        quote.setPadding(0, 20, 0, 16);
+        root.addView(quote, lp());
+
+        TextView author = new TextView(this);
+        author.setText("作者署名：待作者提供网名/笔名");
+        author.setTextColor(Color.parseColor("#8B949E"));
+        author.setTextSize(13);
+        author.setGravity(Gravity.CENTER);
+        root.addView(author, lp());
+
+        TextView decl = new TextView(this);
+        decl.setText("本软件为个人开源项目，作者保留署名权，未经作者授权禁止用于商业用途；如果你能看到此页，说明你值得知道它的来历。");
+        decl.setTextColor(Color.parseColor("#E6EDF3"));
+        decl.setTextSize(13);
+        decl.setLineSpacing(0, 1.6f);
+        decl.setPadding(0, 18, 0, 20);
+        root.addView(decl, lp());
+
+        Button close = new Button(this);
+        close.setText("关闭");
+        close.setBackground(roundedBg(Color.parseColor("#00D2A0"), Color.TRANSPARENT, 999f));
+        close.setTextColor(Color.parseColor("#06231C"));
+        root.addView(close, lp());
+
+        final AlertDialog dlg = new AlertDialog.Builder(this).setView(root).create();
+        close.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { dlg.dismiss(); }
+        });
         dlg.show();
     }
 

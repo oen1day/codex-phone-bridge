@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.2';
+  const APP_VERSION = '10.3';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -716,6 +716,7 @@
 
   function renderHistory(turns) {
     const aiIds = [];
+    if (!turns || !turns.length) renderEmptyHero();
     for (const turn of turns) {
       for (const item of (turn.items || [])) {
         renderHistoryItem(item);
@@ -730,6 +731,18 @@
     updateThinkingIndicator(state.running);
     // 分页未加载完整历史时跳过音频清理，避免误删未加载消息的缓存
     if (!state.threadPage.hasMore) pruneConvAudio(state.currentId, aiIds);
+  }
+
+  // 空对话寄语：纯装饰，不遮挡任何可点击区域
+  function renderEmptyHero() {
+    const hero = document.createElement('div');
+    hero.className = 'empty-hero';
+    hero.innerHTML =
+      '<svg class="empty-shark" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M24 5 C26 15, 30 23, 38 30 C32 34, 27 37, 24 43 C21 37, 16 34, 10 30 C18 23, 22 15, 24 5 Z"/>' +
+      '<path d="M6 43 C14 40, 32 40, 42 43"/></svg>' +
+      '<div class="empty-quote">初，帝以一手机起家，<br>夜召 AI 谋事，遂有天下。<br>然，天下未定，亦未一统；<br>不求独坐江山，惟愿人民安康富庶。</div>';
+    messagesEl.appendChild(hero);
   }
 
   async function loadMoreThread() {
