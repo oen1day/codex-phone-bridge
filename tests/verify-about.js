@@ -15,6 +15,7 @@ const css = read('public/style.css');
 const java = read('android/src/com/local/codexbridge/MainActivity.java');
 const server = read('server.js');
 const readme = read('README.md');
+const readmeEn = fs.existsSync(path.join(root, 'README.en.md')) ? read('README.en.md') : '';
 
 const quote = '初，帝以一手机起家';
 check('app.js 空状态含寄语', app.includes(quote));
@@ -34,6 +35,11 @@ check('README 有 GPL 说明', readme.includes('GPL-3.0'));
 check('README 有贡献章节', readme.includes('## 贡献'));
 check('README 有版权许可章节', readme.includes('## 版权与许可') && readme.includes('同样以 GPL-3.0 开源'));
 check('README 有致谢章节', readme.includes('## 致谢'));
+check('README 有英文版链接', readme.includes('[English](README.en.md)'));
+check('README 有翻译招募', readme.includes('欢迎提交翻译、贡献其他语言'));
+check('README.en.md 存在且完整', readmeEn.includes('# 鳍点AI') && readmeEn.includes('## Contributing') &&
+  readmeEn.includes('## Copyright and License') && readmeEn.includes('GPL-3.0'));
+check('README.en.md 有截图引用', readmeEn.includes('docs/screenshots/01-chat.jpg') && readmeEn.includes('docs/screenshots/03-settings.jpg'));
 check('server.js 有源码暗记', server.includes('作者暗记：add-2026-0805-A1'));
 const license = fs.existsSync(path.join(root, 'LICENSE')) ? read('LICENSE') : '';
 check('LICENSE 是 GPL-3.0', license.includes('GNU GENERAL PUBLIC LICENSE') && license.includes('Version 3'));

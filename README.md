@@ -11,6 +11,8 @@
 
 # 鳍点AI（DeepSeek 版）
 
+[English](README.en.md) · 中文
+
 一个不用登录 ChatGPT 账号、直接用手机控制电脑上 Codex 的小工具。
 模型仍然走你电脑上配置的 DeepSeek 接口，对话、发图片、看结果、批准命令都在手机上完成。
 
@@ -180,6 +182,8 @@ version.json 的内容格式：
 2. 改动前先跑一遍 `tests/` 下的 7 个验证脚本（smoke-app / autospeak / paging / rebind / capabilities / crashguard / about），确保旧功能不回归；
 3. 提交时保留源码中的作者暗记与 git 提交暗记（`--by 你的署名`），不要移除或修改版权信息；
 4. 发起 Pull Request，说明你改了什么、怎么验证的。
+
+界面目前仅支持中文，欢迎提交翻译、贡献其他语言（参考 `README.en.md`）。
 
 二次开发提示：如果 fork 后要发布自己的版本，请把电脑 `config.json` 的 `updateUrl` 和手机设置里的更新地址改成你自己的，并遵守 GPL-3.0（分发时同样开源、保留版权声明）。
 
