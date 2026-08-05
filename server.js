@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '9.0';
+const VERSION = '9.1';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -1033,6 +1033,68 @@ function readTtsStreamFrames(text, jobId, onFrame, onEnd) {
   return { ctrl, task };
 }
 
+// 读取线程（带“未加载先恢复”的兜底逻辑）
+async function readThreadTurns(threadId) {
+  const c = await getClient();
+  try {
+    return await c.call('thread/read', { threadId, includeTurns: true });
+  } catch (e) {
+    const emsg = (e && e.message) || '';
+    if (/includeTurns/i.test(emsg) && !/not materialized|thread not found/i.test(emsg)) {
+      return await c.call('thread/read', { threadId, includeTurns: false });
+    }
+    if (/not materialized|thread not found/i.test(emsg)) {
+      console.log('[codex] 线程未加载，正在恢复线程: ' + threadId);
+      try {
+        await c.call('thread/resume', { threadId });
+      } catch (e2) {
+        console.error('[codex] 恢复线程失败: ' + (e2 && e2.message));
+      }
+      try {
+        return await c.call('thread/read', { threadId, includeTurns: true });
+      } catch (e3) {
+        const emsg3 = (e3 && e3.message) || '';
+        if (/includeTurns/i.test(emsg3)) {
+          return await c.call('thread/read', { threadId, includeTurns: false });
+        }
+        throw new Error('读取对话失败，请稍后重试（' + emsg3 + '）');
+      }
+    }
+    throw e;
+  }
+}
+
+// 把线程按“最近 limit 条消息”分页：按整轮返回，保证气泡完整
+function pageThread(thread, limit, before) {
+  const turns = (thread && thread.turns) || [];
+  const LIMIT = Math.min(50, Math.max(1, Number(limit) || 10));
+  let total = 0;
+  for (const t of turns) {
+    for (const item of (t.items || [])) {
+      if (item.type === 'userMessage' || item.type === 'agentMessage') total++;
+    }
+  }
+  const endMsg = (typeof before === 'number' && before >= 0 && before <= total) ? before : total;
+  const startMsg = Math.max(0, endMsg - LIMIT);
+  const inRange = new Set();
+  let idx = 0;
+  for (const t of turns) {
+    for (const item of (t.items || [])) {
+      if (item.type === 'userMessage' || item.type === 'agentMessage') idx++;
+      if (idx > startMsg && idx <= endMsg) inRange.add(t.id || t.turnId);
+    }
+  }
+  return {
+    thread: {
+      name: (thread && (thread.name || thread.title || thread.preview)) || '',
+      status: (thread && thread.status) || null
+    },
+    turns: turns.filter(t => inRange.has(t.id || t.turnId)),
+    hasMore: startMsg > 0,
+    nextCursor: startMsg
+  };
+}
+
 async function apiDispatch(method, params, clientId) {
   const c = await getClient();
   switch (method) {
@@ -1089,32 +1151,14 @@ async function apiDispatch(method, params, clientId) {
       const owner = ownerOfThread(params.threadId);
       if (clientId && owner && owner !== clientId) throw new Error('该对话属于其他设备');
       registerPhoneThread(params.threadId, clientId);
-      try {
-        return await c.call('thread/read', { threadId: params.threadId, includeTurns: true });
-      } catch (e) {
-        const emsg = (e && e.message) || '';
-        if (/includeTurns/i.test(emsg) && !/not materialized|thread not found/i.test(emsg)) {
-          return await c.call('thread/read', { threadId: params.threadId, includeTurns: false });
-        }
-        if (/not materialized|thread not found/i.test(emsg)) {
-          console.log('[codex] 线程未加载，正在恢复线程: ' + params.threadId);
-          try {
-            await c.call('thread/resume', { threadId: params.threadId });
-          } catch (e2) {
-            console.error('[codex] 恢复线程失败: ' + (e2 && e2.message));
-          }
-          try {
-            return await c.call('thread/read', { threadId: params.threadId, includeTurns: true });
-          } catch (e3) {
-            const emsg3 = (e3 && e3.message) || '';
-            if (/includeTurns/i.test(emsg3)) {
-              return await c.call('thread/read', { threadId: params.threadId, includeTurns: false });
-            }
-            throw new Error('读取对话失败，请稍后重试（' + emsg3 + '）');
-          }
-        }
-        throw e;
-      }
+      return await readThreadTurns(params.threadId);
+    }
+    case 'threadReadPage': {
+      const owner = ownerOfThread(params.threadId);
+      if (clientId && owner && owner !== clientId) throw new Error('该对话属于其他设备');
+      registerPhoneThread(params.threadId, clientId);
+      const thread = await readThreadTurns(params.threadId);
+      return pageThread(thread, params.limit, params.before === undefined ? undefined : Number(params.before));
     }
     case 'threadDelete':
       {
@@ -1471,6 +1515,16 @@ async function handleApi(req, res, url) {
       return;
     }
     let m;
+    if ((m = /^\/api\/threads\/([^/]+)\/page$/.exec(p)) && req.method === 'GET') {
+      const limit = Number(u.searchParams.get('limit')) || 10;
+      const beforeRaw = u.searchParams.get('before');
+      sendJson(res, 200, await apiDispatch('threadReadPage', {
+        threadId: decodeURIComponent(m[1]),
+        limit,
+        before: beforeRaw === null ? undefined : Number(beforeRaw)
+      }));
+      return;
+    }
     if ((m = /^\/api\/threads\/([^/]+)$/.exec(p)) && req.method === 'GET') {
       sendJson(res, 200, await apiDispatch('threadRead', { threadId: decodeURIComponent(m[1]) }));
       return;

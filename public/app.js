@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '9.0';
+  const APP_VERSION = '9.1';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -62,7 +62,9 @@
     running: false,
     blocks: new Map(),   // itemId -> block element
     approvals: new Map(), // requestId -> card element
-    pendingImages: []
+    pendingImages: [],
+    pageTurns: [],       // 当前会话已加载的历史轮次（旧 → 新）
+    threadPage: { hasMore: false, nextCursor: 0, loading: false }
   };
   let pinnedIds = new Set();
   try { pinnedIds = new Set(JSON.parse(localStorage.getItem('pinnedThreads') || '[]')); } catch (_) {}
@@ -108,6 +110,11 @@
         break;
       case 'threadRead':
         url = '/api/threads/' + encodeURIComponent(params.threadId); init = { method: 'GET' };
+        break;
+      case 'threadReadPage':
+        url = '/api/threads/' + encodeURIComponent(params.threadId) + '/page?limit=' + ((params && params.limit) || 10) +
+          ((params && params.before !== undefined) ? '&before=' + params.before : '');
+        init = { method: 'GET' };
         break;
       case 'threadDelete':
         url = '/api/threads/' + encodeURIComponent(params.threadId); init = { method: 'DELETE' };
@@ -555,6 +562,8 @@
         state.currentId = null;
         state.turnId = null;
         state.running = false;
+        state.pageTurns = [];
+        state.threadPage = { hasMore: false, nextCursor: 0, loading: false };
         stopTurnPolling();
         stopTurnWatchdog();
         messagesEl.innerHTML = '';
@@ -623,7 +632,7 @@
       let data = null;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          data = await apiCall('threadRead', { threadId: id });
+          data = await apiCall('threadReadPage', { threadId: id, limit: 10 });
           break;
         } catch (e) {
           lastErr = (e && e.message) || '未知错误';
@@ -635,7 +644,9 @@
         }
       }
       if (state.currentId !== id) return;
-      const thread = data.thread || data;
+      const thread = data.thread || {};
+      state.pageTurns = data.turns || [];
+      state.threadPage = { hasMore: !!data.hasMore, nextCursor: data.nextCursor || 0, loading: false };
       const thName = thread.name || thread.title || thread.preview;
       if (thName) chatTitle.textContent = thName;
       if (thread.status && thread.status.type === 'active') {
@@ -648,7 +659,7 @@
       $('interruptBtn').classList.toggle('hidden', !state.running);
       clearTimeout(ticker);
       messagesEl.innerHTML = '';
-      renderHistory(thread.turns || []);
+      renderHistory(state.pageTurns);
       scrollBottom();
       restoreSpeakBtnState();
     } catch (e) {
@@ -681,7 +692,33 @@
       }
     }
     updateThinkingIndicator(state.running);
-    pruneConvAudio(state.currentId, aiIds);
+    // 分页未加载完整历史时跳过音频清理，避免误删未加载消息的缓存
+    if (!state.threadPage.hasMore) pruneConvAudio(state.currentId, aiIds);
+  }
+
+  async function loadMoreThread() {
+    if (!state.currentId || !state.threadPage.hasMore || state.threadPage.loading) return;
+    state.threadPage.loading = true;
+    const prevScrollHeight = messagesEl.scrollHeight;
+    const prevScrollTop = messagesEl.scrollTop;
+    try {
+      const data = await apiCall('threadReadPage', { threadId: state.currentId, limit: 10, before: state.threadPage.nextCursor });
+      const older = data.turns || [];
+      const known = new Set(state.pageTurns.map(t => t.id || t.turnId));
+      const merged = older.filter(t => !known.has(t.id || t.turnId)).concat(state.pageTurns);
+      state.pageTurns = merged;
+      state.threadPage = { hasMore: !!data.hasMore, nextCursor: data.nextCursor || 0, loading: false };
+      state.blocks.clear();
+      speakButtons.clear();
+      messagesEl.innerHTML = '';
+      renderHistory(merged);
+      // 保持视口位置：新加载的旧消息追加在顶部
+      messagesEl.scrollTop = messagesEl.scrollHeight - prevScrollHeight + prevScrollTop;
+      restoreSpeakBtnState();
+    } catch (e) {
+      state.threadPage.loading = false;
+      showToast('加载更多历史失败: ' + ((e && e.message) || e), true);
+    }
   }
 
   function renderHistoryItem(item) {
@@ -967,8 +1004,10 @@
   async function refreshThreadNow() {
     if (!state.currentId) return;
     try {
-      const data = await apiCall('threadRead', { threadId: state.currentId });
-      const thread = data.thread || data;
+      const data = await apiCall('threadReadPage', { threadId: state.currentId, limit: 10 });
+      const thread = data.thread || {};
+      state.pageTurns = data.turns || [];
+      state.threadPage = { hasMore: !!data.hasMore, nextCursor: data.nextCursor || 0, loading: false };
       state.blocks.clear();
       speakButtons.clear();
       state.approvals.clear();
@@ -983,11 +1022,11 @@
         state.running = false;
         setStatus('已连接');
       }
-      renderHistory(thread.turns || []);
+      renderHistory(state.pageTurns);
       scrollBottom();
       restoreSpeakBtnState();
       let hasText = false;
-      for (const t of (thread.turns || [])) {
+      for (const t of state.pageTurns) {
         for (const item of (t.items || [])) {
           if ((item.type === 'agentMessage' || item.type === 'reasoning') && ((item.text || item.summary || '')).trim()) { hasText = true; break; }
         }
@@ -1013,7 +1052,7 @@
       setStatus('已连接');
     }
     $('interruptBtn').classList.toggle('hidden', !state.running);
-    renderHistory(thread.turns || []);
+    renderHistory(state.pageTurns);
     scrollBottom();
     updateThinkingIndicator(state.running);
     restoreSpeakBtnState();
@@ -1027,9 +1066,11 @@
         return;
       }
       try {
-        const data = await apiCall('threadRead', { threadId: state.currentId });
-        const thread = data.thread || data;
-        const turns = thread.turns || [];
+        const data = await apiCall('threadReadPage', { threadId: state.currentId, limit: 10 });
+        const thread = data.thread || {};
+        const turns = data.turns || [];
+        state.pageTurns = turns;
+        state.threadPage = { hasMore: !!data.hasMore, nextCursor: data.nextCursor || 0, loading: false };
         const targetTurnId = state.turnId;
         let target = null;
         if (targetTurnId) target = turns.find(t => t.id === targetTurnId) || null;
@@ -2185,6 +2226,10 @@
   function openSidebar() { $('sidebar').classList.add('open'); }
   function closeSidebar() { $('sidebar').classList.remove('open'); }
 
+  // 上滑到顶时加载更早的 10 条历史
+  messagesEl.addEventListener('scroll', () => {
+    if (messagesEl.scrollTop <= 2) loadMoreThread();
+  });
   $('menuBtn').addEventListener('click', openSidebar);
   $('closeSidebarBtn').addEventListener('click', closeSidebar);
   $('newChatBtn').addEventListener('click', newThread);
