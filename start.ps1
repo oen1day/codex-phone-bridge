@@ -37,7 +37,7 @@ if (-not $codex) {
   exit 1
 }
 
-@{ nodePath = $node; codexPath = $codex } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'paths.json') -Encoding UTF8
+[System.IO.File]::WriteAllText((Join-Path $root 'paths.json'), (@{ nodePath = $node; codexPath = $codex } | ConvertTo-Json), (New-Object System.Text.UTF8Encoding $false))
 
 $ip = $null
 try {

@@ -154,7 +154,11 @@ if (config.relayEnabled) {
 console.log('[config] 一键配置密钥: ' + config.shareKey);
 
 function loadPaths() {
-  try { return JSON.parse(fs.readFileSync(PATHS_PATH, 'utf8')); } catch (_) { return {}; }
+  try {
+    let raw = fs.readFileSync(PATHS_PATH, 'utf8');
+    if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+    return JSON.parse(raw);
+  } catch (_) { return {}; }
 }
 
 function findCodex() {
@@ -776,9 +780,11 @@ async function ttsSynthesizeOne(seg) {
 
 function findTtsPython() {
   if (config.ttsPythonPath && fs.existsSync(config.ttsPythonPath)) return config.ttsPythonPath;
+  const home = process.env.USERPROFILE || '';
   const cands = [
     path.join(ROOT, '..', 'work', 'index-tts', '.venv', 'Scripts', 'python.exe'),
-    'E:\\Codex\\work\\index-tts\\.venv\\Scripts\\python.exe'
+    path.join(home, 'Codex', 'work', 'index-tts', '.venv', 'Scripts', 'python.exe'),
+    path.join(home, 'work', 'index-tts', '.venv', 'Scripts', 'python.exe')
   ];
   return cands.find(p => fs.existsSync(p)) || '';
 }
