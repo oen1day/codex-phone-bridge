@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '7.3';
+  const APP_VERSION = '7.4';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -563,6 +563,12 @@
     }
   }
 
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  function isTransientThreadErr(msg) {
+    return /超时|中继未连接|连接断开|fetch failed|network|ECONN/i.test(msg || '');
+  }
+
   async function openThread(id) {
     stopTurnPolling();
     stopTurnWatchdog();
@@ -582,8 +588,31 @@
     chatTitle.textContent = (t && (t.name || t.title || t.preview)) || '对话中…';
     renderThreads();
     closeSidebar();
+    setStatus('正在读取历史对话…');
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'thread-loading system-line';
+    loadingEl.textContent = '⏳ 正在读取历史对话，请稍候…';
+    messagesEl.appendChild(loadingEl);
+    const ticker = setTimeout(() => {
+      loadingEl.textContent = '⏳ 读取较慢：首次打开旧对话需要电脑恢复线程，请再稍候…';
+    }, 8000);
+    let lastErr = '';
     try {
-      const data = await apiCall('threadRead', { threadId: id });
+      let data = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          data = await apiCall('threadRead', { threadId: id });
+          break;
+        } catch (e) {
+          lastErr = (e && e.message) || '未知错误';
+          if (attempt === 0 && isTransientThreadErr(lastErr)) {
+            await sleep(800);
+            continue;
+          }
+          throw e;
+        }
+      }
+      if (state.currentId !== id) return;
       const thread = data.thread || data;
       const thName = thread.name || thread.title || thread.preview;
       if (thName) chatTitle.textContent = thName;
@@ -595,11 +624,23 @@
         setStatus('已连接');
       }
       $('interruptBtn').classList.toggle('hidden', !state.running);
+      clearTimeout(ticker);
+      messagesEl.innerHTML = '';
       renderHistory(thread.turns || []);
       scrollBottom();
     } catch (e) {
-      setStatus('读取对话失败: ' + e.message, true);
-      showToast('读取对话失败: ' + e.message, true);
+      clearTimeout(ticker);
+      if (state.currentId !== id) return;
+      loadingEl.remove();
+      const msg = (e && e.message) || lastErr || '未知错误';
+      setStatus('读取对话失败', true);
+      const failEl = document.createElement('div');
+      failEl.className = 'thread-loading system-line';
+      failEl.innerHTML = '⚠ 读取历史对话失败：' + escapeHtml(msg) + '　<span class="link-btn" id="retryThreadBtn">点此重试</span>';
+      messagesEl.appendChild(failEl);
+      const btn = failEl.querySelector('#retryThreadBtn');
+      if (btn) btn.addEventListener('click', () => { failEl.remove(); openThread(id); });
+      showToast('读取对话失败: ' + msg, true);
     }
   }
 

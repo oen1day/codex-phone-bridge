@@ -69,6 +69,8 @@ body {
 }
 .toast-overlay.err { background: #3a1f1f; border-color: #7f3b3b; color: #fca5a5; }
 .system-line { text-align: center; color: #7c8698; font-size: 12px; margin: 6px 0 12px; }
+.thread-loading { color: #8ea0b8; }
+.link-btn { color: #22d3a5; text-decoration: underline; cursor: pointer; }
 
 .msg { margin-bottom: 14px; display: flex; flex-direction: column; }
 .msg.user { align-items: flex-end; }

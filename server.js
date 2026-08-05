@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '7.3';
+const VERSION = '7.4';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -760,8 +760,25 @@ async function apiDispatch(method, params, clientId) {
         return await c.call('thread/read', { threadId: params.threadId, includeTurns: true });
       } catch (e) {
         const emsg = (e && e.message) || '';
-        if (/not materialized|includeTurns/i.test(emsg)) {
+        if (/includeTurns/i.test(emsg) && !/not materialized|thread not found/i.test(emsg)) {
           return await c.call('thread/read', { threadId: params.threadId, includeTurns: false });
+        }
+        if (/not materialized|thread not found/i.test(emsg)) {
+          console.log('[codex] 线程未加载，正在恢复线程: ' + params.threadId);
+          try {
+            await c.call('thread/resume', { threadId: params.threadId });
+          } catch (e2) {
+            console.error('[codex] 恢复线程失败: ' + (e2 && e2.message));
+          }
+          try {
+            return await c.call('thread/read', { threadId: params.threadId, includeTurns: true });
+          } catch (e3) {
+            const emsg3 = (e3 && e3.message) || '';
+            if (/includeTurns/i.test(emsg3)) {
+              return await c.call('thread/read', { threadId: params.threadId, includeTurns: false });
+            }
+            throw new Error('读取对话失败，请稍后重试（' + emsg3 + '）');
+          }
         }
         throw e;
       }
