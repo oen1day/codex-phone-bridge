@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '8.8';
+  const APP_VERSION = '8.9';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -2006,6 +2006,8 @@
   async function playStreamMessage(convId, msgId, text, auto, temp) {
     if (!convId || !msgId || !text || !text.trim()) return;
     const msgKey = ttsKey(convId, msgId);
+    // 幂等：同一条消息已在朗读/生成中时不重复启动（防止回合数据触发与 DOM 触发双启动）
+    if (ttsActiveKey === msgKey && ttsActiveState !== 'idle') return;
     const meta0 = getTtsMeta();
     if (meta0[msgKey] && (meta0[msgKey].segs || 0) > 0) {
       // 已有缓存的音频，直接播放缓存，不再重新合成
