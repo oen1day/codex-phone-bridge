@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '8.6';
+  const APP_VERSION = '8.7';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -866,6 +866,7 @@
       const tid = params.turn && params.turn.id;
       // 先用当前界面立即触发自动朗读（去掉固定 400ms 等待）
       const triggered = maybeAutoSpeak();
+      console.log('[turn] completed tid=' + (tid || '-') + ' autoSpeak=' + autoSpeak + ' triggered=' + triggered);
       // 刷新只做后台修复；立即触发未命中时（事件丢失）刷新后补一次
       setTimeout(async () => {
         if (state.turnId && state.turnId !== tid) return;
@@ -2164,14 +2165,21 @@
     const last = agents[agents.length - 1];
     if (!last) return false;
     const msgId = last.dataset.msgId;
-    if (!msgId || msgId === turnStartLastMsgId) return false;
     const text = collectAgentText(last);
-    if (!text.trim()) return false;
-    const id = ttsKey(state.currentId, msgId);
-    // 同一消息已在朗读/生成中（会话未变）时不重复触发
-    if (ttsActiveKey === id && ttsSession) return false;
+    const id = ttsKey(state.currentId, msgId || '');
     const meta = getTtsMeta();
+    const diag = 'msgId=' + (msgId || '-') + ' turnStart=' + turnStartLastMsgId +
+      ' textLen=' + (text || '').trim().length + ' activeKey=' + ttsActiveKey +
+      ' state=' + ttsActiveState + ' meta=' + (meta[id] ? (meta[id].temp ? 'temp' : 'perm') : 'none');
+    if (!msgId) { console.log('[autoSpeak] 跳过(无msgId) ' + diag); return false; }
+    if (msgId === turnStartLastMsgId) { console.log('[autoSpeak] 跳过(仍是本轮开始前消息) ' + diag); return false; }
+    if (!text.trim()) { console.log('[autoSpeak] 跳过(无文本) ' + diag); return false; }
+    // 自愈：空闲状态下清掉残留的归属键，避免误拦新消息
+    if (ttsActiveKey && ttsActiveState === 'idle') ttsActiveKey = null;
+    // 只拦“同一消息确实正在生成/播放中”的重复触发
+    if (ttsActiveKey === id && ttsActiveState !== 'idle') { console.log('[autoSpeak] 跳过(已在朗读/生成中) ' + diag); return false; }
     if (meta[id] && !meta[id].temp) return false; // 已完整播放过，跳过
+    console.log('[autoSpeak] 触发 ' + diag);
     speakMessage(state.currentId, msgId, text, true);
     return true;
   }
