@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '8.4';
+  const APP_VERSION = '8.5';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -84,6 +84,7 @@
   const ttsGenerating = new Map();
   let ttsGenEpoch = 0;
   let ttsActiveKey = null;
+  let ttsActiveState = 'idle';
   let ttsSession = 0;
   const ttsWaitResolvers = new Set();
   let ttsAudioEl = null;
@@ -650,6 +651,7 @@
       messagesEl.innerHTML = '';
       renderHistory(thread.turns || []);
       scrollBottom();
+      restoreSpeakBtnState();
     } catch (e) {
       clearTimeout(ticker);
       if (state.currentId !== id) return;
@@ -995,6 +997,7 @@
         if (hasText) break;
       }
       if (!hasText) addSystemLine('⚠ 本轮已完成，但没收到回复内容（请把电脑窗口的文字发给我）');
+      restoreSpeakBtnState();
     } catch (_) {}
   }
 
@@ -1017,6 +1020,7 @@
     renderHistory(thread.turns || []);
     scrollBottom();
     updateThinkingIndicator(state.running);
+    restoreSpeakBtnState();
   }
 
   function startTurnPolling() {
@@ -1668,6 +1672,7 @@
   }
 
   function setSpeakBtn(key, state) {
+    if (key === ttsActiveKey) ttsActiveState = state;
     const btn = speakButtons.get(key);
     if (!btn) return;
     btn.classList.remove('speaking', 'disabled');
@@ -1679,6 +1684,13 @@
       btn.textContent = '⏳ 生成中…';
     } else {
       btn.textContent = '🔊 朗读';
+    }
+  }
+
+  // 后台刷新重建界面后，恢复当前朗读按钮的状态（防止“声音在播但按钮显示未朗读”）
+  function restoreSpeakBtnState() {
+    if (ttsActiveKey && ttsActiveState && ttsActiveState !== 'idle') {
+      setSpeakBtn(ttsActiveKey, ttsActiveState);
     }
   }
 
@@ -1706,6 +1718,7 @@
     ttsSession++;
     const k = ttsActiveKey;
     ttsActiveKey = null;
+    ttsActiveState = 'idle';
     if (ttsLanReader) {
       try { ttsLanReader.cancel(); } catch (_) {}
       ttsLanReader = null;
@@ -1839,6 +1852,7 @@
 
   function finishTts(key) {
     if (ttsActiveKey === key) ttsActiveKey = null;
+    ttsActiveState = 'idle';
     setSpeakBtn(key, 'idle');
   }
 
