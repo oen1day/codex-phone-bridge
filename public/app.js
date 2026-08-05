@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '7.2';
+  const APP_VERSION = '7.3';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -82,7 +82,9 @@
   const speakButtons = new Map();
   const ttsMem = new Map();
   const ttsGenerating = new Map();
-  let playingTtsKey = null;
+  let ttsActiveKey = null;
+  let ttsSession = 0;
+  const ttsWaitResolvers = new Set();
   let ttsAudioEl = null;
   let ttsBlobUrl = null;
   const replySeen = {};
@@ -1410,8 +1412,9 @@
       if (meta[id].temp && String(meta[id].convId) === String(convId)) remove.push(id);
     }
     for (const id of remove) {
+      const r = meta[id];
       delete meta[id];
-      ttsDelete(id);
+      ttsDeleteMessage(id, r && r.segs);
     }
     setTtsMeta(meta);
   }
@@ -1421,8 +1424,9 @@
     const remove = [];
     for (const id of Object.keys(meta)) if (meta[id].temp) remove.push(id);
     for (const id of remove) {
+      const r = meta[id];
       delete meta[id];
-      ttsDelete(id);
+      ttsDeleteMessage(id, r && r.segs);
     }
     setTtsMeta(meta);
   }
@@ -1437,8 +1441,9 @@
       if (!r.temp && String(r.convId) === String(convId) && !set.has(String(r.msgId))) remove.push(id);
     }
     for (const id of remove) {
+      const r = meta[id];
       delete meta[id];
-      await ttsDelete(id);
+      await ttsDeleteMessage(id, r && r.segs);
     }
     setTtsMeta(meta);
   }
@@ -1466,31 +1471,108 @@
       for (const x of g.recs) if (!x.rec.temp && !keepIds.has(x.id)) remove.push(x.id);
     });
     for (const id of remove) {
+      const r = meta[id];
       delete meta[id];
-      await ttsDelete(id);
+      await ttsDeleteMessage(id, r && r.segs);
     }
     setTtsMeta(meta);
   }
 
-  async function ensureTtsAudio(convId, msgId, text, temp) {
-    const id = ttsKey(convId, msgId);
-    if (ttsGenerating.has(id)) return ttsGenerating.get(id);
+  async function ttsDeleteMessage(msgKey, segs) {
+    await ttsDelete(msgKey);
+    const n = Number(segs) || 0;
+    for (let i = 0; i <= n; i++) await ttsDelete(ttsSegKey(msgKey, i));
+  }
+
+  function ttsSegKey(msgKey, i) { return String(msgKey) + '__s' + i; }
+
+  // 朗读文本清洗：去掉 Markdown、代码块、网址、emoji 等不适合朗读的内容
+  function cleanTtsText(text) {
+    let s = String(text || '');
+    s = s.replace(/```[\s\S]*?```/g, ' ').replace(/~~~[\s\S]*?~~~/g, ' ');
+    s = s.replace(/`([^`]*)`/g, '$1');
+    s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+    s = s.replace(/https?:\/\/[^\s，。！？；、\)\],!?;:<>'"\u4e00-\u9fff]+/g, ' ');
+    s = s.replace(/^\s{0,3}(#{1,6}\s+|>\s*|\*\s+|-{1,2}\s+|\d+[.、]\s+)/gm, ' ');
+    s = s.replace(/(\*\*|__|\*|_|~~)/g, '');
+    s = s.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, ' ');
+    s = s.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n');
+    return s.trim();
+  }
+
+  // 按句切段：第一段尽量短（50~80 字），其余每段不超过 150 字
+  function splitTtsSegments(text) {
+    const clean = cleanTtsText(text);
+    if (!clean) return [];
+    const MAX = 150;
+    const FIRST_MAX = 80;
+    const units = clean.split(/(?<=[。！？…!?；;])|\n/).map(x => x.trim()).filter(Boolean);
+    const segs = [];
+    let cur = '';
+    const flush = () => { if (cur) { segs.push(cur); cur = ''; } };
+    for (const u of units) {
+      if (u.length > MAX) {
+        const pieces = u.split(/(?<=[，,、])/);
+        for (let p of pieces) {
+          p = (p || '').trim();
+          if (!p) continue;
+          while (p.length > MAX) {
+            cur += p.slice(0, MAX);
+            flush();
+            p = p.slice(MAX);
+          }
+          if (cur && cur.length + p.length > MAX) flush();
+          cur += p;
+        }
+      } else {
+        if (cur && cur.length + u.length > MAX) flush();
+        cur += u;
+      }
+    }
+    flush();
+    if (segs.length > 1 && segs[0].length > FIRST_MAX) {
+      const first = segs[0];
+      let cut = -1;
+      for (let i = Math.min(FIRST_MAX, first.length) - 1; i >= 0; i--) {
+        if (/[。！？；!?;]/.test(first[i])) { cut = i + 1; break; }
+      }
+      if (cut < 0) {
+        for (let i = Math.min(FIRST_MAX, first.length) - 1; i >= 0; i--) {
+          if (/[，、,]/.test(first[i])) { cut = i + 1; break; }
+        }
+      }
+      if (cut < 0) cut = FIRST_MAX;
+      segs.splice(0, 1, first.slice(0, cut), first.slice(cut));
+    }
+    return segs.filter(s => s.trim());
+  }
+
+  async function ensureTtsSegment(convId, msgId, idx, segText, temp) {
+    const msgKey = ttsKey(convId, msgId);
+    const key = ttsSegKey(msgKey, idx);
+    const cached = await ttsLoadBlob(key);
+    if (cached) return cached;
+    if (ttsGenerating.has(key)) return ttsGenerating.get(key);
     const p = (async () => {
-      const cached = await ttsLoadBlob(id);
-      if (cached) return cached;
-      showToast('正在生成语音…');
-      const res = await apiCall('ttsGenerate', { text: text || '' }, 600000);
+      const res = await apiCall('ttsGenerate', { text: segText || '' }, 600000);
       if (!res || !res.audioB64) throw new Error('语音生成失败');
       const blob = b64ToBlob(res.audioB64, res.mime || 'audio/wav');
-      await ttsSaveBlob(id, blob);
+      await ttsSaveBlob(key, blob);
       const meta = getTtsMeta();
-      meta[id] = { convId: String(convId), msgId: String(msgId), ts: Date.now(), temp: !!temp };
+      const prev = meta[msgKey] || {};
+      meta[msgKey] = {
+        convId: String(convId),
+        msgId: String(msgId),
+        ts: Date.now(),
+        temp: !!temp,
+        segs: Math.max(idx + 1, prev.segs || 0)
+      };
       setTtsMeta(meta);
       cleanupTts();
       return blob;
     })();
-    ttsGenerating.set(id, p);
-    p.catch(() => {}).then(() => ttsGenerating.delete(id));
+    ttsGenerating.set(key, p);
+    p.catch(() => {}).then(() => ttsGenerating.delete(key));
     return p;
   }
 
@@ -1504,8 +1586,6 @@
       btn.classList.add('speaking');
     } else if (state === 'loading') {
       btn.textContent = '⏳ 生成中…';
-      btn.classList.add('disabled');
-      btn.disabled = true;
     } else {
       btn.textContent = '🔊 朗读';
     }
@@ -1532,6 +1612,9 @@
   }
 
   function stopSpeaking() {
+    ttsSession++;
+    const k = ttsActiveKey;
+    ttsActiveKey = null;
     if (ttsAudioEl) {
       try { ttsAudioEl.pause(); ttsAudioEl.onended = null; ttsAudioEl.onerror = null; } catch (_) {}
     }
@@ -1539,92 +1622,107 @@
       try { URL.revokeObjectURL(ttsBlobUrl); } catch (_) {}
       ttsBlobUrl = null;
     }
-    const k = playingTtsKey;
-    playingTtsKey = null;
+    for (const r of ttsWaitResolvers) {
+      try { r(false); } catch (_) {}
+    }
+    ttsWaitResolvers.clear();
     if (k) setSpeakBtn(k, 'idle');
   }
 
-  function playTtsBlob(id, blob) {
-    stopSpeaking();
-    try {
-      const url = URL.createObjectURL(blob);
-      if (!ttsAudioEl) ttsAudioEl = new Audio();
-      ttsAudioEl.src = url;
-      ttsBlobUrl = url;
-      playingTtsKey = id;
-      setSpeakBtn(id, 'playing');
-      ttsAudioEl.onended = () => {
-        if (playingTtsKey === id) {
-          playingTtsKey = null;
-          setSpeakBtn(id, 'idle');
+  function playTtsSegment(blob, session) {
+    return new Promise((resolve) => {
+      if (session !== ttsSession) { resolve(false); return; }
+      setSpeakBtn(ttsActiveKey, 'playing');
+      let settled = false;
+      const done = (ok) => {
+        if (settled) return;
+        settled = true;
+        ttsWaitResolvers.delete(done);
+        if (ttsAudioEl) {
+          ttsAudioEl.onended = null;
+          ttsAudioEl.onerror = null;
         }
+        resolve(ok);
       };
-      ttsAudioEl.onerror = () => {
-        if (playingTtsKey === id) {
-          playingTtsKey = null;
-          setSpeakBtn(id, 'idle');
+      ttsWaitResolvers.add(done);
+      try {
+        const url = URL.createObjectURL(blob);
+        if (!ttsAudioEl) ttsAudioEl = new Audio();
+        if (ttsBlobUrl) {
+          try { URL.revokeObjectURL(ttsBlobUrl); } catch (_) {}
         }
-        showToast('音频播放失败', true);
-      };
-      const pr = ttsAudioEl.play();
-      if (pr && pr.catch) pr.catch(() => {
-        if (playingTtsKey === id) {
-          playingTtsKey = null;
-          setSpeakBtn(id, 'idle');
-        }
-        showToast('自动播放被系统拦截，请再点一次「朗读」', true);
-      });
-    } catch (e) {
-      playingTtsKey = null;
-      setSpeakBtn(id, 'idle');
-      showToast('播放失败: ' + e.message, true);
-    }
+        ttsAudioEl.src = url;
+        ttsBlobUrl = url;
+        ttsAudioEl.onended = () => done(true);
+        ttsAudioEl.onerror = () => done(false);
+        const pr = ttsAudioEl.play();
+        if (pr && pr.catch) pr.catch(() => done(false));
+      } catch (_) {
+        done(false);
+      }
+    });
   }
 
-  async function onSpeakClick(agentEl) {
+  function finishTts(key) {
+    if (ttsActiveKey === key) ttsActiveKey = null;
+    setSpeakBtn(key, 'idle');
+  }
+
+  async function playMessageSegments(convId, msgId, text, auto, temp) {
+    if (!convId || !msgId || !text || !text.trim()) return;
+    const msgKey = ttsKey(convId, msgId);
+    stopSpeaking();
+    const session = ++ttsSession;
+    ttsActiveKey = msgKey;
+    const segs = splitTtsSegments(text);
+    if (!segs.length) {
+      finishTts(msgKey);
+      showToast('这条消息没有可朗读的文字', true);
+      return;
+    }
+    for (let i = 0; i < segs.length; i++) {
+      if (session !== ttsSession) return;
+      setSpeakBtn(msgKey, 'loading');
+      let blob;
+      try {
+        if (i === 0) showToast('正在生成语音…');
+        blob = await ensureTtsSegment(convId, msgId, i, segs[i], temp);
+      } catch (e) {
+        if (session === ttsSession) {
+          finishTts(msgKey);
+          showToast('朗读失败: ' + ((e && e.message) || e), true);
+        }
+        return;
+      }
+      if (session !== ttsSession) return;
+      if (state.currentId !== convId) {
+        finishTts(msgKey);
+        return;
+      }
+      if (auto && !autoSpeak) continue;
+      const played = await playTtsSegment(blob, session);
+      if (!played) return;
+    }
+    if (session === ttsSession) finishTts(msgKey);
+  }
+
+  function onSpeakClick(agentEl) {
     const convId = state.currentId;
     if (!convId) { showToast('请先打开一个对话', true); return; }
     const msgId = agentEl.dataset.msgId || ('msg' + Date.now());
     const text = collectAgentText(agentEl);
     if (!text.trim()) { showToast('这条消息没有可朗读的文字', true); return; }
-    const id = ttsKey(convId, msgId);
-    if (playingTtsKey === id) { stopSpeaking(); return; }
-    stopSpeaking();
-    try {
-      const meta = getTtsMeta();
-      const rec = meta[id];
-      const temp = !rec || rec.temp;
-      const cached = await ttsLoadBlob(id);
-      if (cached) { playTtsBlob(id, cached); return; }
-      setSpeakBtn(id, 'loading');
-      const blob = await ensureTtsAudio(convId, msgId, text, temp);
-      playTtsBlob(id, blob);
-    } catch (e) {
-      setSpeakBtn(id, 'idle');
-      showToast('朗读失败: ' + ((e && e.message) || e), true);
-    }
+    const msgKey = ttsKey(convId, msgId);
+    if (ttsActiveKey === msgKey) { stopSpeaking(); return; }
+    const meta = getTtsMeta();
+    const rec = meta[msgKey];
+    const temp = !rec || rec.temp;
+    playMessageSegments(convId, msgId, text, false, temp);
   }
 
-  async function speakMessage(convId, msgId, text, auto) {
+  function speakMessage(convId, msgId, text, auto) {
     if (!convId || !msgId || !text || !text.trim()) return;
-    const id = ttsKey(convId, msgId);
-    if (ttsGenerating.has(id)) return;
-    try {
-      setSpeakBtn(id, 'loading');
-      const blob = await ensureTtsAudio(convId, msgId, text, false);
-      if (state.currentId !== convId) {
-        setSpeakBtn(id, 'idle');
-        return;
-      }
-      if (auto && !autoSpeak) {
-        setSpeakBtn(id, 'idle');
-        return;
-      }
-      playTtsBlob(id, blob);
-    } catch (e) {
-      setSpeakBtn(id, 'idle');
-      showToast('朗读生成失败: ' + ((e && e.message) || e), true);
-    }
+    playMessageSegments(convId, msgId, text, auto, false);
   }
 
   function maybeAutoSpeak() {
