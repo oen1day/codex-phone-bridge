@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private static final String KEY_AUTO_SPEAK = "auto_speak";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "7.0";
+    private static final String APP_VERSION = "7.1";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -544,9 +544,33 @@ public class MainActivity extends Activity {
             public void run() {
                 String msg = "";
                 final String[] apkUrl = { "" };
-                final String[] urls = {
-                    updateUrl
-                };
+                final java.util.List<String> urlList = new java.util.ArrayList<String>();
+                urlList.add(updateUrl);
+                try {
+                    java.net.URL u0 = new java.net.URL(updateUrl);
+                    String host = u0.getHost();
+                    String path = u0.getPath();
+                    if ("raw.githubusercontent.com".equalsIgnoreCase(host)) {
+                        String[] seg = path.split("/");
+                        if (seg.length >= 4 && path.endsWith("/version.json")) {
+                            String ghUser = seg[1];
+                            String ghRepo = seg[2];
+                            String ghBranch = seg[3];
+                            urlList.add("https://cdn.jsdelivr.net/gh/" + ghUser + "/" + ghRepo + "@" + ghBranch + "/version.json");
+                            urlList.add("https://github.com/" + ghUser + "/" + ghRepo + "/raw/" + ghBranch + "/version.json");
+                        }
+                    } else if ("github.com".equalsIgnoreCase(host)) {
+                        String[] seg = path.split("/");
+                        if (seg.length >= 5 && "raw".equals(seg[3]) && path.endsWith("/version.json")) {
+                            String ghUser = seg[1];
+                            String ghRepo = seg[2];
+                            String ghBranch = seg[4];
+                            urlList.add("https://raw.githubusercontent.com/" + ghUser + "/" + ghRepo + "/" + ghBranch + "/version.json");
+                            urlList.add("https://cdn.jsdelivr.net/gh/" + ghUser + "/" + ghRepo + "@" + ghBranch + "/version.json");
+                        }
+                    }
+                } catch (Exception ignored) {}
+                final String[] urls = urlList.toArray(new String[0]);
                 String lastErr = "";
                 try {
                     boolean ok = false;

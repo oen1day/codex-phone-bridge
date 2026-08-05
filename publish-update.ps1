@@ -134,6 +134,12 @@ if ($sha) { $putArgs += @('-f', "sha=$sha") }
 if ((Invoke-Gh @($putArgs)) -ne 0) {
   throw '上传 version.json 失败'
 }
+try {
+  Invoke-WebRequest -Uri "https://purge.jsdelivr.net/gh/$user/$repo@$branch/version.json" -Method Get -TimeoutSec 15 -UseBasicParsing | Out-Null
+  Write-Host '已刷新 jsdelivr 镜像缓存'
+} catch {
+  Write-Host 'jsdelivr 缓存刷新失败（不影响发布）'
+}
 
 # 发布 Release 并上传两个安装包
 Write-Host '发布 Release ...'
