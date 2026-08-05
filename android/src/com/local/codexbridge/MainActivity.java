@@ -11,6 +11,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Environment;
 import android.os.Bundle;
@@ -58,7 +59,7 @@ public class MainActivity extends Activity {
     private static final String KEY_AUTO_SPEAK = "auto_speak";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "9.9";
+    private static final String APP_VERSION = "10.0";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -341,12 +342,21 @@ public class MainActivity extends Activity {
         setContentView(root);
     }
 
+    // 霓虹线稿风：圆角背景 + 1px 描边
+    private GradientDrawable roundedBg(int fill, int stroke, float radius) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(fill);
+        d.setStroke(1, stroke);
+        d.setCornerRadius(radius);
+        return d;
+    }
+
     private LinearLayout buildSetupForm(final String[] initial, final boolean firstRun, final AlertDialog dialogToDismiss) {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setPadding(56, 40, 56, 40);
-        root.setBackgroundColor(Color.parseColor("#0f1115"));
+        root.setBackgroundColor(Color.parseColor("#0B0E14"));
 
         TextView title = new TextView(this);
         title.setText("鳍点AI");
@@ -357,7 +367,7 @@ public class MainActivity extends Activity {
 
         TextView sub = new TextView(this);
         sub.setText(firstRun ? "先选择连接方式，再填写信息" : "修改连接设置");
-        sub.setTextColor(Color.parseColor("#9aa3b2"));
+        sub.setTextColor(Color.parseColor("#8B949E"));
         sub.setGravity(Gravity.CENTER);
         root.addView(sub, lp());
 
@@ -375,7 +385,7 @@ public class MainActivity extends Activity {
 
         final TextView keyLabel = new TextView(this);
         keyLabel.setText("一键配置密钥（新用户推荐：填电脑窗口里的密钥即可自动配置）");
-        keyLabel.setTextColor(Color.parseColor("#22d3a5"));
+        keyLabel.setTextColor(Color.parseColor("#00D2A0"));
         root.addView(keyLabel, lp());
 
         final EditText keyInput = new EditText(this);
@@ -385,8 +395,8 @@ public class MainActivity extends Activity {
 
         final Button keyBtn = new Button(this);
         keyBtn.setText("一键配置");
-        keyBtn.setBackgroundColor(Color.parseColor("#10a37f"));
-        keyBtn.setTextColor(Color.WHITE);
+        keyBtn.setBackground(roundedBg(Color.parseColor("#00D2A0"), Color.TRANSPARENT, 999f));
+        keyBtn.setTextColor(Color.parseColor("#06231C"));
         root.addView(keyBtn, lp());
 
         final EditText urlInput = new EditText(this);
@@ -415,7 +425,7 @@ public class MainActivity extends Activity {
 
         final TextView effortLabel = new TextView(this);
         effortLabel.setText("推理强度（影响速度与 token 消耗）");
-        effortLabel.setTextColor(Color.parseColor("#9aa3b2"));
+        effortLabel.setTextColor(Color.parseColor("#8B949E"));
         root.addView(effortLabel, lp());
 
         final String[] effortLabels = {"极低", "轻度", "中", "高", "极高", "最高"};
@@ -434,12 +444,12 @@ public class MainActivity extends Activity {
 
         final TextView autoSpeakLabel = new TextView(this);
         autoSpeakLabel.setText("自动朗读 AI 回复（每条回复仍会生成语音）");
-        autoSpeakLabel.setTextColor(Color.parseColor("#9aa3b2"));
+        autoSpeakLabel.setTextColor(Color.parseColor("#8B949E"));
         root.addView(autoSpeakLabel, lp());
 
         final CheckBox autoSpeakBox = new CheckBox(this);
         autoSpeakBox.setText("开启自动朗读");
-        autoSpeakBox.setTextColor(Color.WHITE);
+        autoSpeakBox.setTextColor(Color.parseColor("#E6EDF3"));
         boolean curAutoSpeak = initial == null || initial.length <= 7 || !"false".equalsIgnoreCase(initial[7]);
         autoSpeakBox.setChecked(curAutoSpeak);
         root.addView(autoSpeakBox, lp());
@@ -452,14 +462,14 @@ public class MainActivity extends Activity {
 
         final Button updateBtn = new Button(this);
         updateBtn.setText("检查更新");
-        updateBtn.setBackgroundColor(Color.parseColor("#2a2f3a"));
-        updateBtn.setTextColor(Color.WHITE);
+        updateBtn.setBackground(roundedBg(Color.parseColor("#151A23"), Color.parseColor("#4000D2A0"), 999f));
+        updateBtn.setTextColor(Color.parseColor("#E6EDF3"));
         root.addView(updateBtn, lp());
 
         Button save = new Button(this);
         save.setText("保存并连接");
-        save.setBackgroundColor(Color.parseColor("#10a37f"));
-        save.setTextColor(Color.WHITE);
+        save.setBackground(roundedBg(Color.parseColor("#00D2A0"), Color.TRANSPARENT, 999f));
+        save.setTextColor(Color.parseColor("#06231C"));
         root.addView(save, lp());
 
         final Runnable applyMode = new Runnable() {
@@ -469,8 +479,10 @@ public class MainActivity extends Activity {
                 urlInput.setVisibility(relay ? View.GONE : View.VISIBLE);
                 roomInput.setVisibility(relay ? View.VISIBLE : View.GONE);
                 pwInput.setVisibility(relay ? View.VISIBLE : View.GONE);
-                lanBtn.setBackgroundColor(Color.parseColor(relay ? "#2a2f3a" : "#10a37f"));
-                relayBtn.setBackgroundColor(Color.parseColor(relay ? "#10a37f" : "#2a2f3a"));
+                lanBtn.setBackground(roundedBg(Color.parseColor(relay ? "#151A23" : "#00D2A0"), Color.parseColor(relay ? "#4000D2A0" : "#00000000"), 999f));
+                lanBtn.setTextColor(Color.parseColor(relay ? "#8B949E" : "#06231C"));
+                relayBtn.setBackground(roundedBg(Color.parseColor(relay ? "#00D2A0" : "#151A23"), Color.parseColor(relay ? "#00000000" : "#4000D2A0"), 999f));
+                relayBtn.setTextColor(Color.parseColor(relay ? "#06231C" : "#8B949E"));
             }
         };
         lanBtn.setOnClickListener(new View.OnClickListener() {
@@ -698,7 +710,7 @@ public class MainActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.parseColor("#0f1115"));
+        root.setBackgroundColor(Color.parseColor("#0B0E14"));
 
         web = new WebView(this);
         WebSettings s = web.getSettings();
@@ -821,10 +833,11 @@ public class MainActivity extends Activity {
     }
 
     private void styleInput(EditText input) {
-        input.setTextColor(Color.WHITE);
-        input.setHintTextColor(Color.parseColor("#9aa3b2"));
+        input.setTextColor(Color.parseColor("#E6EDF3"));
+        input.setHintTextColor(Color.parseColor("#5C6670"));
         input.setSingleLine(true);
-        input.setPadding(12, 12, 12, 12);
+        input.setPadding(16, 12, 16, 12);
+        input.setBackground(roundedBg(Color.parseColor("#151A23"), Color.parseColor("#4000D2A0"), 12f));
     }
 
     @Override

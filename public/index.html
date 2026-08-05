@@ -9,6 +9,10 @@
 <body>
   <div id="loginView" class="login-view hidden">
     <div class="login-card">
+      <svg class="shark-mark" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-label="鳍点AI">
+        <path d="M24 5 C26 15, 30 23, 38 30 C32 34, 27 37, 24 43 C21 37, 16 34, 10 30 C18 23, 22 15, 24 5 Z"/>
+        <path d="M6 43 C14 40, 32 40, 42 43"/>
+      </svg>
       <h1>鳍点AI</h1>
       <p class="login-tip">输入电脑上显示的访问密码</p>
       <input id="passwordInput" type="password" placeholder="访问密码" autocomplete="current-password">
@@ -19,7 +23,13 @@
 
   <div id="mainView" class="main-view hidden">
     <div class="app-header">
-      <div class="app-brand"><span class="brand-dot"></span>鳍点AI</div>
+      <div class="app-brand">
+        <svg class="shark-mark small" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-label="鳍点AI">
+          <path d="M24 5 C26 15, 30 23, 38 30 C32 34, 27 37, 24 43 C21 37, 16 34, 10 30 C18 23, 22 15, 24 5 Z"/>
+          <path d="M6 43 C14 40, 32 40, 42 43"/>
+        </svg>
+        鳍点AI
+      </div>
       <div class="app-actions">
         <button id="refreshBtn" class="icon-btn" title="刷新">⟳</button>
         <button id="settingsBtn" class="icon-btn" title="设置">⚙</button>

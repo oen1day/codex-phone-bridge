@@ -5,9 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <title>一键配置</title>
   <style>
-    body { margin:0; background:#0f1115; color:#e6edf7; font-family:sans-serif;
+    :root { --primary:#00D2A0; --bg:#0B0E14; --surface:#151A23; --text:#E6EDF3; --text-muted:#8B949E; }
+    body {
+      margin:0;
+      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(0,210,160,.06), transparent 60%), var(--bg);
+      color: var(--text);
+      font-family: -apple-system, "PingFang SC", "Noto Sans SC", "Roboto", sans-serif;
       display:flex; align-items:center; justify-content:center; height:100vh; }
-    #msg { font-size:16px; text-align:center; padding:24px; }
+    #msg {
+      font-size:16px; text-align:center; padding:24px;
+      color: var(--text-muted);
+      display:flex; align-items:center; gap:10px;
+      background: var(--surface);
+      border: 1px solid rgba(0,210,160,.25);
+      border-radius: 18px;
+    }
+    #msg::before {
+      content: '';
+      width: 16px; height: 16px; flex: 0 0 auto;
+      border: 2px solid rgba(0,210,160,.25);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: qc-spin .9s linear infinite;
+    }
+    @keyframes qc-spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>

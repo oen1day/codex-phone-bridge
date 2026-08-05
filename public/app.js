@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '9.9';
+  const APP_VERSION = '10.0';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -1725,13 +1725,14 @@
       }
     }
     if (!btn) return;
-    btn.classList.remove('speaking', 'disabled');
+    btn.classList.remove('speaking', 'disabled', 'loading');
     btn.disabled = false;
     if (state === 'playing') {
       btn.textContent = '⏹ 停止';
       btn.classList.add('speaking');
     } else if (state === 'loading') {
       btn.textContent = '⏳ 生成中…';
+      btn.classList.add('loading');
     } else {
       btn.textContent = '🔊 朗读';
     }
