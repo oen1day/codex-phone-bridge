@@ -182,6 +182,7 @@
       this.clientId = opts.clientId || ('cb_' + randId());
       this.chunks = {};
       this.closed = false;
+      this._retryTimer = null;
       this.pingTimer = null;
     }
 
@@ -192,6 +193,10 @@
 
     _connect() {
       return new Promise((resolve, reject) => {
+        if (this.closed) {
+          reject(new Error('closed'));
+          return;
+        }
         let settled = false;
         let ws;
         try {
@@ -222,7 +227,9 @@
           fail(new Error('中继连接被关闭'));
           if (!this.closed) {
             this.onStatus('连接断开，重连中…');
-            setTimeout(() => this._connect().catch(() => {}), 3000);
+            this._retryTimer = setTimeout(() => {
+              if (!this.closed) this._connect().catch(() => {});
+            }, 3000);
           }
         };
         ws.addEventListener('open', onOpen);
@@ -362,6 +369,10 @@
 
     stop() {
       this.closed = true;
+      if (this._retryTimer) {
+        clearTimeout(this._retryTimer);
+        this._retryTimer = null;
+      }
       if (this.pingTimer) clearInterval(this.pingTimer);
       try { if (this.ws) this.ws.close(); } catch (_) {}
     }

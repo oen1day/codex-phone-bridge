@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '5.3';
+  const APP_VERSION = '5.4';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 120;
   const STUCK_TOTAL_SEC = 480;
@@ -43,9 +43,17 @@
     return id;
   }
   let relayChannel = null;
+  const relayChannelsSet = new Set();
   let relayPending = new Map();
   let relayRpcId = 0;
   let relayConnecting = false;
+
+  function stopAllRelayChannels() {
+    for (const ch of relayChannelsSet) {
+      try { ch.stop(); } catch (_) {}
+    }
+    relayChannelsSet.clear();
+  }
 
   const state = {
     threads: [],
@@ -225,6 +233,7 @@
       brokers.push('wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt');
       const seen = new Set();
       let lastErr = '中继连接失败';
+      stopAllRelayChannels();
       relayChannel = null;
       for (const broker of brokers) {
         if (seen.has(broker)) continue;
@@ -278,10 +287,16 @@
           }
         }
       });
-      ch.start().catch(e => reject(new Error('无法连接中继服务器: ' + ((e && e.message) || e))));
+      relayChannelsSet.add(ch);
+      ch.start().catch(e => {
+        try { ch.stop(); } catch (_) {}
+        relayChannelsSet.delete(ch);
+        reject(new Error('无法连接中继服务器: ' + ((e && e.message) || e)));
+      });
       setTimeout(() => {
         if (!ch._resolved) {
           try { ch.stop(); } catch (_) {}
+          relayChannelsSet.delete(ch);
           reject(new Error('中继连接超时'));
         }
       }, 15000);
@@ -1238,10 +1253,8 @@
     $('settingsBtn').classList.add('hidden');
   }
   $('reconnectBtn').addEventListener('click', async () => {
-    if (relayChannel) {
-      try { relayChannel.stop(); } catch (_) {}
-      relayChannel = null;
-    }
+    stopAllRelayChannels();
+    relayChannel = null;
     showToast('正在重新连接…');
     await connectRelay();
   });
@@ -1336,7 +1349,7 @@
     showToast('页面错误: ' + (e.message || '未知错误'), true);
   });
   setInterval(() => {
-    if (relayCfg && relayChannel && !relayChannel.ready && !relayConnecting) {
+    if (relayCfg && !relayConnecting && !(relayChannel && relayChannel.ready)) {
       connectRelay();
     }
   }, 3000);
