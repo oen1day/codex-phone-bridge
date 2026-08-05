@@ -31,6 +31,9 @@ check('关于页有开源链接', java.includes('github.com/oen1day/codex-phone-
 check('README 有寄语', readme.includes(quote));
 check('README 版权行 add', readme.includes('© 2026 add'));
 check('README 有 GPL 说明', readme.includes('GPL-3.0'));
+check('README 有贡献章节', readme.includes('## 贡献'));
+check('README 有版权许可章节', readme.includes('## 版权与许可') && readme.includes('同样以 GPL-3.0 开源'));
+check('README 有致谢章节', readme.includes('## 致谢'));
 check('server.js 有源码暗记', server.includes('作者暗记：add-2026-0805-A1'));
 const license = fs.existsSync(path.join(root, 'LICENSE')) ? read('LICENSE') : '';
 check('LICENSE 是 GPL-3.0', license.includes('GNU GENERAL PUBLIC LICENSE') && license.includes('Version 3'));
