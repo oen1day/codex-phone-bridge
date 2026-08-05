@@ -148,7 +148,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '6.2' }
+        serverInfo: { name: 'codex-phone-bridge', version: '6.3' }
       }
     });
     return;

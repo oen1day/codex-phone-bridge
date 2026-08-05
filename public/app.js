@@ -12,10 +12,10 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '6.2';
+  const APP_VERSION = '6.3';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
-  const STUCK_IDLE_SEC = 120;
-  const STUCK_TOTAL_SEC = 480;
+  const STUCK_IDLE_SEC = 240;
+  const STUCK_TOTAL_SEC = 600;
   let relayCfg = window.RELAY_CONFIG || null;
   if (!relayCfg && window.AndroidBridge && window.AndroidBridge.getRelayConfig) {
     try {
@@ -998,7 +998,7 @@
       any = true;
       const sec = Math.floor((Date.now() - Number(ind.dataset.started || Date.now())) / 1000);
       const t = ind.querySelector('.think-text');
-      if (t) t.textContent = '正在思考… ' + sec + '秒' + (sec >= 120 ? '（较久，可点右上角停止）' : '');
+      if (t) t.textContent = '正在思考… ' + sec + '秒' + (sec >= STUCK_IDLE_SEC ? '（较久，可点右上角停止）' : '');
     }
     if (!any) clearThinkTimer();
   }

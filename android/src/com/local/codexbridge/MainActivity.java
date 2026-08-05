@@ -52,7 +52,7 @@ public class MainActivity extends Activity {
     private static final String KEY_EFFORT = "effort";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "6.2";
+    private static final String APP_VERSION = "6.3";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -577,7 +577,9 @@ public class MainActivity extends Activity {
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(true);
-        web.addJavascriptInterface(new JsBridge(), "AndroidBridge");
+        if ("relay".equals(mode)) {
+            web.addJavascriptInterface(new JsBridge(), "AndroidBridge");
+        }
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {

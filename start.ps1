@@ -50,7 +50,13 @@ try {
     Select-Object -First 1).IPAddress
 } catch {}
 
-$cfg = Get-Content -Raw -LiteralPath (Join-Path $root 'config.json') | ConvertFrom-Json
+$cfgPath = Join-Path $root 'config.json'
+if (-not (Test-Path $cfgPath)) {
+  Write-Host '首次启动：尚未找到配置文件，将由程序自动生成配对码/密码/密钥…' -ForegroundColor Yellow
+  $cfg = [pscustomobject]@{ port = 8787 }
+} else {
+  $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
+}
 
 Write-Host ''
 Write-Host '==============================================' -ForegroundColor Cyan
