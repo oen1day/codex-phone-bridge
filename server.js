@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '8.9';
+const VERSION = '9.0';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -358,10 +358,7 @@ function handleServerMessage(msg) {
     }
   } else if (msg.method === 'turn/started') {
     const tid = params.turn && params.turn.id;
-    if (tid) {
-      preGenTexts.set(tid, '');
-      ttsSummaryReset(tid);
-    }
+    if (tid) preGenTexts.set(tid, '');
   } else if (msg.method === 'turn/completed') {
     const tid = (params.turn && params.turn.id) || activeTurn.turnId;
     if (tid) {
@@ -369,13 +366,7 @@ function handleServerMessage(msg) {
       preGenTexts.delete(tid);
       const auto = turnAutoSpeak.get(tid) !== false;
       turnAutoSpeak.delete(tid);
-      if (text && auto) {
-        // 自动朗读开启时手机会立即逐段生成，跳过整段预生成（避免重复合成+刚排队就被取消）
-        console.log('[tts] 自动朗读开启，跳过整段预生成（手机端即时生成）');
-      } else if (text) {
-        queuePreGen(text, auto);
-      }
-      ttsSummaryLog(tid);
+      if (text) queuePreGen(text, auto);
     }
   }
   console.log('[codex] 事件: ' + msg.method + (msg.params && msg.params.threadId ? ' #' + msg.params.threadId : ''));
@@ -785,9 +776,7 @@ function wavToMp3(wavBuf) {
   });
 }
 
-const ttsRealTimeJobs = new Map(); // jobId -> {ctrl, done}，用于新消息时统一取消实时合成
-
-async function doTtsGenerate(clean, jobInfo) {
+async function doTtsGenerate(clean) {
   fs.mkdirSync(TTS_DIR, { recursive: true });
   const key = ttsCacheKey(clean);
   const wavFile = path.join(TTS_DIR, key + '.wav');
@@ -797,22 +786,13 @@ async function doTtsGenerate(clean, jobInfo) {
   if (fs.existsSync(wavFile)) {
     wav = fs.readFileSync(wavFile);
   } else {
-    // 走流式接口（带 job_id，可被取消），收完帧拼成 WAV 缓存
-    const frames = [];
-    const r = readTtsStreamFrames(clean, jobInfo.jobId, (frame) => frames.push(frame), () => {});
-    jobInfo.ctrl = r.ctrl;
-    const watchdog = setTimeout(() => {
-      ttsSummaryNote('rtTimeout');
-      try { r.ctrl.abort(); } catch (_) {}
-    }, 8 * 60 * 1000);
-    try {
-      await r.task;
-    } finally {
-      clearTimeout(watchdog);
-      jobInfo.done = true;
+    const segs = splitTtsText(clean, config.ttsSegmentChars);
+    if (!segs.length) throw new Error('没有可朗读的文字');
+    const parts = [];
+    for (const seg of segs) {
+      parts.push(await ttsSynthesizeOne(seg));
     }
-    if (!frames.length) throw new Error('语音生成失败');
-    wav = concatWavs(frames);
+    wav = concatWavs(parts);
     fs.writeFileSync(wavFile, wav);
     pruneTtsCache();
   }
@@ -833,35 +813,14 @@ function ttsGenerate(text) {
   if (!clean) return Promise.reject(new Error('没有可朗读的文字'));
   const key = ttsCacheKey(clean);
   if (ttsInflight.has(key)) return ttsInflight.get(key);
-  const jobId = 'rt' + Date.now().toString(36) + '-' + (++ttsStreamSeq);
-  const jobInfo = { jobId, ctrl: null, done: false };
-  ttsRealTimeJobs.set(jobId, jobInfo);
-  ttsSummary.segments++;
-  ttsSummary.starts++;
-  const run = ttsChain.then(() => doTtsGenerate(clean, jobInfo));
+  const run = ttsChain.then(() => doTtsGenerate(clean));
   ttsInflight.set(key, run);
-  const cleanup = () => {
-    if (ttsRealTimeJobs.get(jobId) === jobInfo) ttsRealTimeJobs.delete(jobId);
-  };
   const settled = run.then(
-    v => { ttsInflight.delete(key); cleanup(); return v; },
-    e => { ttsInflight.delete(key); cleanup(); throw e; }
+    v => { ttsInflight.delete(key); return v; },
+    e => { ttsInflight.delete(key); throw e; }
   );
   ttsChain = settled.catch(() => {});
   return settled;
-}
-
-function cancelRealTimeTts(reason) {
-  for (const [jobId, info] of ttsRealTimeJobs) {
-    if (!info.done) {
-      ttsSummaryNote(reason || 'cancel');
-      cancelTtsJob(jobId);
-      if (info.ctrl) {
-        try { info.ctrl.abort(); } catch (_) {}
-      }
-    }
-  }
-  ttsRealTimeJobs.clear();
 }
 
 function pruneTtsCache() {
@@ -909,40 +868,7 @@ const turnAutoSpeak = new Map(); // turnId -> 是否开启自动朗读
 let preGenRunning = false;
 let preGenCtrl = null;
 let preGenJobId = '';
-let preGenCurrentJob = null;
 let ttsRealTimeBusy = false;
-
-// ---------- TTS 行为统计（每轮结束时输出一行，用于定位过度取消） ----------
-const ttsSummary = { turnId: null, segments: 0, starts: 0, cancels: 0, preCancels: 0, reasons: {} };
-
-function ttsSummaryReset(turnId) {
-  ttsSummary.turnId = turnId || null;
-  ttsSummary.segments = 0;
-  ttsSummary.starts = 0;
-  ttsSummary.cancels = 0;
-  ttsSummary.preCancels = 0;
-  ttsSummary.reasons = {};
-}
-
-function ttsSummaryNote(reason) {
-  ttsSummary.cancels++;
-  ttsSummary.reasons[reason] = (ttsSummary.reasons[reason] || 0) + 1;
-}
-
-function ttsSummaryNotePre(reason) {
-  ttsSummary.preCancels++;
-  ttsSummary.reasons[reason] = (ttsSummary.reasons[reason] || 0) + 1;
-}
-
-function ttsSummaryLog(turnId) {
-  const reasons = Object.keys(ttsSummary.reasons).map(r => r + 'x' + ttsSummary.reasons[r]).join(',') || '-';
-  console.log('[tts-summary] turn=' + (turnId || '-') +
-    ' segments=' + ttsSummary.segments +
-    ' starts=' + ttsSummary.starts +
-    ' cancels=' + ttsSummary.cancels +
-    ' preCancels=' + ttsSummary.preCancels +
-    ' reasons=[' + reasons + ']');
-}
 
 function ttsCacheReady(clean) {
   if (!clean) return false;
@@ -1025,7 +951,6 @@ function processPreGenQueue() {
   preGenRunning = true;
   const jobId = 'pre' + Date.now().toString(36) + '-' + (++ttsStreamSeq);
   preGenJobId = jobId;
-  preGenCurrentJob = job;
   const frames = [];
   try {
     const r = readTtsStreamFrames(job.text, jobId, (frame) => frames.push(frame), () => {});
@@ -1049,28 +974,18 @@ function processPreGenQueue() {
       preGenRunning = false;
       preGenCtrl = null;
       preGenJobId = '';
-      preGenCurrentJob = null;
       processPreGenQueue();
     });
   } catch (e) {
     preGenRunning = false;
     preGenCtrl = null;
     preGenJobId = '';
-    preGenCurrentJob = null;
     processPreGenQueue();
   }
 }
 
-function cancelPreGen(skipText, reason) {
-  if (preGenRunning && preGenJobId) {
-    if (skipText && preGenCurrentJob && preGenCurrentJob.text === skipText) {
-      // 正在预生成的正是这段文本：让预生成跑完（实时请求会命中缓存/排队），不打断
-      preGenQueue.length = 0;
-      return;
-    }
-    ttsSummaryNotePre(reason || 'cancel');
-    cancelTtsJob(preGenJobId);
-  }
+function cancelPreGen() {
+  if (preGenRunning && preGenJobId) cancelTtsJob(preGenJobId);
   if (preGenCtrl) {
     try { preGenCtrl.abort(); } catch (_) {}
     preGenCtrl = null;
@@ -1215,8 +1130,7 @@ async function apiDispatch(method, params, clientId) {
         return r;
       }
     case 'turnStart': {
-      cancelPreGen(null, 'newMessage'); // 新消息一到就取消旧语音预生成，清空队列
-      cancelRealTimeTts('newMessage'); // 同时取消在途的实时分段合成
+      cancelPreGen(); // 新消息一到就取消旧语音预生成，清空队列
       const body = params || {};
       const threadId = params.threadId;
       const owner = ownerOfThread(threadId);
@@ -1287,7 +1201,7 @@ async function apiDispatch(method, params, clientId) {
     case 'ping':
       return { ok: true, room: config.relayRoomCode, version: VERSION, time: Date.now() };
     case 'ttsGenerate': {
-      cancelPreGen(cleanTtsText(params.text || ''), 'preempt');
+      cancelPreGen();
       ttsRealTimeBusy = true;
       try {
         const r = await ttsGenerate(params.text);
@@ -1298,9 +1212,9 @@ async function apiDispatch(method, params, clientId) {
       }
     }
     case 'ttsStreamStart': {
-      const text = String(params.text || '').replace(/\s+/g, ' ').trim();
-      cancelPreGen(cleanTtsText(text), 'preempt');
+      cancelPreGen();
       ttsRealTimeBusy = true;
+      const text = String(params.text || '').replace(/\s+/g, ' ').trim();
       if (!text) {
         ttsRealTimeBusy = false;
         processPreGenQueue();
@@ -1339,7 +1253,6 @@ async function apiDispatch(method, params, clientId) {
     case 'ttsStreamStop': {
       const entry = ttsStreams.get(params.id);
       if (entry) {
-        ttsSummaryNote('userStop');
         entry.done = true;
         ttsRealTimeBusy = false;
         processPreGenQueue();

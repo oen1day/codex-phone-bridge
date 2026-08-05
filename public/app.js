@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '8.9';
+  const APP_VERSION = '9.0';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -82,7 +82,6 @@
   const speakButtons = new Map();
   const ttsMem = new Map();
   const ttsGenerating = new Map();
-  let ttsGenEpoch = 0;
   let ttsActiveKey = null;
   let ttsActiveState = 'idle';
   let ttsSession = 0;
@@ -91,7 +90,7 @@
   let ttsBlobUrl = null;
   let ttsStreamState = null;
   let ttsLanReader = null;
-  const pollRefreshed = {}; // doneId -> true，轮询兜底刷新去重
+  const replySeen = {};
 
   // ---------- 通信层（局域网 / 中继） ----------
   async function lanCall(method, params, timeoutMs) {
@@ -844,6 +843,7 @@
       state.running = true;
       turnStartLastMsgId = currentLastMsgId();
       deleteTempsForConv(state.currentId);
+      replySeen[state.turnId] = false;
       setStatus('正在运行…');
       $('interruptBtn').classList.remove('hidden');
       turnStartAt = Date.now();
@@ -863,26 +863,11 @@
       for (const b of state.blocks.values()) b.classList.remove('typing');
       loadThreads();
       const tid = params.turn && params.turn.id;
-      // 优先用回合数据触发（不依赖 DOM 是否已渲染），DOM 作为兜底
-      let triggered = false;
-      const turnAgent = lastAgentFromThread(params.turn);
-      if (turnAgent) triggered = tryAutoSpeakMessage(state.currentId, turnAgent.id, turnAgent.text);
-      if (!triggered) triggered = maybeAutoSpeak();
-      console.log('[turn] completed tid=' + (tid || '-') + ' autoSpeak=' + autoSpeak + ' triggered=' + triggered);
-      // 未触发时：后台刷新 + 自动重试（最多 3 次，间隔 2 秒，每次都用最新数据再试）
       setTimeout(async () => {
         if (state.turnId && state.turnId !== tid) return;
-        for (let attempt = 0; attempt < 3 && !triggered; attempt++) {
-          const thread = await refreshThreadNow();
-          if (state.turnId && state.turnId !== tid) return;
-          if (!triggered) {
-            const ta = thread ? lastAgentFromThread(thread) : null;
-            if (ta) triggered = tryAutoSpeakMessage(state.currentId, ta.id, ta.text);
-          }
-          if (!triggered) triggered = maybeAutoSpeak();
-          if (!triggered && attempt < 2) await sleep(2000);
-        }
-      }, 0);
+        await refreshThreadNow();
+        maybeAutoSpeak();
+      }, 400);
     } else if (method === 'turn/error') {
       stopTurnPolling();
       stopTurnWatchdog();
@@ -959,6 +944,7 @@
     if (item.type === 'agentMessage') {
       const cur = (block.textContent || '').trim();
       if (item.text && (!cur || item.text.length > cur.length)) block.textContent = item.text;
+      if ((item.text || '').trim()) replySeen[state.turnId] = true;
       block.classList.add('agent-text');
     } else if (item.type === 'commandExecution') {
       renderBlock(block, { kind: 'cmd', id: item.id, label: '正在执行电脑命令…', status: item.status || '', output: item.output || '', command: '' });
@@ -979,44 +965,36 @@
   }
 
   async function refreshThreadNow() {
-    if (!state.currentId) return null;
-    // 失败可见 + 自动重试一次，返回读取到的线程数据（供自动朗读直接用）
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const data = await apiCall('threadRead', { threadId: state.currentId });
-        const thread = data.thread || data;
-        state.blocks.clear();
-        speakButtons.clear();
-        state.approvals.clear();
-        approvalArea.innerHTML = '';
-        messagesEl.innerHTML = '';
-        const thName = thread.name || thread.title || thread.preview;
-        if (thName) chatTitle.textContent = thName;
-        if (thread.status && thread.status.type === 'active') {
-          state.running = true;
-          setStatus('正在运行…');
-        } else {
-          state.running = false;
-          setStatus('已连接');
-        }
-        renderHistory(thread.turns || []);
-        scrollBottom();
-        let hasText = false;
-        for (const t of (thread.turns || [])) {
-          for (const item of (t.items || [])) {
-            if ((item.type === 'agentMessage' || item.type === 'reasoning') && ((item.text || item.summary || '')).trim()) { hasText = true; break; }
-          }
-          if (hasText) break;
-        }
-        if (!hasText) addSystemLine('⚠ 本轮已完成，但没收到回复内容（请把电脑窗口的文字发给我）');
-        restoreSpeakBtnState();
-        return thread;
-      } catch (e) {
-        console.log('[refresh] threadRead 失败: ' + ((e && e.message) || e));
-        if (attempt === 0) await sleep(2000);
+    if (!state.currentId) return;
+    try {
+      const data = await apiCall('threadRead', { threadId: state.currentId });
+      const thread = data.thread || data;
+      state.blocks.clear();
+      speakButtons.clear();
+      state.approvals.clear();
+      approvalArea.innerHTML = '';
+      messagesEl.innerHTML = '';
+      const thName = thread.name || thread.title || thread.preview;
+      if (thName) chatTitle.textContent = thName;
+      if (thread.status && thread.status.type === 'active') {
+        state.running = true;
+        setStatus('正在运行…');
+      } else {
+        state.running = false;
+        setStatus('已连接');
       }
-    }
-    return null;
+      renderHistory(thread.turns || []);
+      scrollBottom();
+      restoreSpeakBtnState();
+      let hasText = false;
+      for (const t of (thread.turns || [])) {
+        for (const item of (t.items || [])) {
+          if ((item.type === 'agentMessage' || item.type === 'reasoning') && ((item.text || item.summary || '')).trim()) { hasText = true; break; }
+        }
+        if (hasText) break;
+      }
+      if (!hasText) addSystemLine('⚠ 本轮已完成，但没收到回复内容（请把电脑窗口的文字发给我）');
+    } catch (_) {}
   }
 
   function refreshThreadFromData(thread) {
@@ -1062,10 +1040,9 @@
         if (!turnDone) return;
         stopTurnPolling();
         const doneId = target.id;
-        if (!pollRefreshed[doneId]) {
-          pollRefreshed[doneId] = true;
+        if (!replySeen[doneId]) {
+          replySeen[doneId] = true;
           refreshThreadFromData(thread);
-          maybeAutoSpeak(); // turn/completed 事件丢失时，轮询兜底也触发自动朗读
         }
       } catch (_) {}
     }, 1800);
@@ -1080,18 +1057,6 @@
 
   function startTurnWatchdog() {
     stopTurnWatchdog();
-    let watchdogRefreshed = false;
-    function doTimeoutStop() {
-      stopTurnWatchdog();
-      stopTurnPolling();
-      setStatus('思考超时，正在自动停止…', true);
-      addSystemLine('⚠ 思考超过时限，已自动停止。可调低推理强度后重试，或点右上角「停止」。');
-      if (state.turnId) {
-        apiCall('interrupt', { threadId: state.currentId, turnId: state.turnId }).then(() => {
-          setStatus('已超时终止', true);
-        }).catch(() => {});
-      }
-    }
     turnWatchdog = setInterval(() => {
       if (!state.running || !state.currentId) {
         stopTurnWatchdog();
@@ -1101,22 +1066,15 @@
       const idleSec = Math.floor((now - lastTurnActivityAt) / 1000);
       const totalSec = Math.floor((now - turnStartAt) / 1000);
       if (idleSec > STUCK_IDLE_SEC || totalSec > STUCK_TOTAL_SEC) {
-        if (!watchdogRefreshed) {
-          // 超时判定前先兜底刷新一次：可能只是事件丢了，回复其实已完成
-          watchdogRefreshed = true;
-          setStatus('思考时间较长，正在检查回复…', true);
-          refreshThreadNow().then(() => {
-            if (state.running) {
-              doTimeoutStop();
-            } else {
-              stopTurnWatchdog();
-              stopTurnPolling();
-              maybeAutoSpeak();
-            }
-          });
-          return;
+        stopTurnWatchdog();
+        stopTurnPolling();
+        setStatus('思考超时，正在自动停止…', true);
+        addSystemLine('⚠ 思考超过时限，已自动停止。可调低推理强度后重试，或点右上角「停止」。');
+        if (state.turnId) {
+          apiCall('interrupt', { threadId: state.currentId, turnId: state.turnId }).then(() => {
+            setStatus('已超时终止', true);
+          }).catch(() => {});
         }
-        doTimeoutStop();
       }
     }, 10000);
   }
@@ -1228,8 +1186,6 @@
   // ---------- send ----------
   async function send() {
     stopSpeaking(); // 发送即停旧语音播放并取消旧合成
-    ttsGenEpoch++; // 使在途分段请求失效，避免旧任务污染新会话
-    ttsGenerating.clear();
     const text = inputBox.value.trim();
     const images = state.pendingImages.slice();
     if (!text && !images.length) return;
@@ -1268,6 +1224,7 @@
       if (turn && turn.id) {
         state.turnId = turn.id;
         state.running = true;
+        replySeen[turn.id] = false;
         setStatus('正在运行…');
         $('interruptBtn').classList.remove('hidden');
         turnStartAt = Date.now();
@@ -1664,7 +1621,6 @@
     const cached = await ttsLoadBlob(key);
     if (cached) return cached;
     if (ttsGenerating.has(key)) return ttsGenerating.get(key);
-    const epoch = ttsGenEpoch;
     const p = (async () => {
       // 中继分片可能丢块：缩短超时并自动重试一次（服务端有缓存，重试通常秒回）
       let lastErr = null;
@@ -1680,7 +1636,7 @@
             convId: String(convId),
             msgId: String(msgId),
             ts: Date.now(),
-            temp: true, // 生成但未完整播放前标记为临时，播放完成后转永久
+            temp: !!temp,
             segs: Math.max(idx + 1, prev.segs || 0)
           };
           setTtsMeta(meta);
@@ -1688,16 +1644,13 @@
           return blob;
         } catch (e) {
           lastErr = e;
-          if (epoch !== ttsGenEpoch) break; // 已发送新消息，放弃重试
           if (attempt === 0) await sleep(1500);
         }
       }
       throw lastErr;
     })();
     ttsGenerating.set(key, p);
-    p.catch(() => {}).then(() => {
-      if (epoch === ttsGenEpoch) ttsGenerating.delete(key);
-    });
+    p.catch(() => {}).then(() => ttsGenerating.delete(key));
     return p;
   }
 
@@ -1712,7 +1665,7 @@
     if (key === ttsActiveKey) ttsActiveState = state;
     let btn = speakButtons.get(key);
     if (!btn && key) {
-      // 按钮注册表可能被刷新清掉但 DOM 还在：从 DOM 找回并重新注册
+      // 注册表可能被刷新清掉但 DOM 还在：从 DOM 找回并重新注册
       const all = document.querySelectorAll('.speak-btn');
       for (const b of all) {
         if (b._speakKey === key) {
@@ -1735,7 +1688,7 @@
     }
   }
 
-  // 后台刷新重建界面后，恢复当前朗读按钮的状态（防止“声音在播但按钮显示未朗读”）
+  // 后台刷新重建界面后，恢复当前朗读按钮的状态
   function restoreSpeakBtnState() {
     if (ttsActiveKey) {
       setSpeakBtn(ttsActiveKey, ttsActiveState);
@@ -1907,15 +1860,6 @@
     setSpeakBtn(key, 'idle');
   }
 
-  // 整条消息完整播放完成后，把缓存标记从“临时”转为“已播放”（避免未播完被误跳）
-  function markTtsPlayed(msgKey) {
-    const meta = getTtsMeta();
-    if (meta[msgKey]) {
-      meta[msgKey].temp = false;
-      setTtsMeta(meta);
-    }
-  }
-
   async function tryTtsStatus(text) {
     try {
       const st = await apiCall('ttsStatus', { text: text || '' }, 15000);
@@ -1949,7 +1893,6 @@
       return;
     }
     let idx = startIdx;
-    let playedAny = false;
     while (true) {
       if (session !== ttsSession) break;
       const frame = await nextTtsFrame(sid, session);
@@ -1981,7 +1924,7 @@
           convId: String(convId),
           msgId: String(msgId),
           ts: Date.now(),
-          temp: true,
+          temp: !!temp,
           segs: idx + 1
         };
         setTtsMeta(meta);
@@ -1994,20 +1937,14 @@
         if (session === ttsSession) finishTts(msgKey);
         break;
       }
-      playedAny = true;
       idx++;
     }
-    if (session === ttsSession) {
-      if (playedAny) markTtsPlayed(msgKey);
-      finishTts(msgKey);
-    }
+    if (session === ttsSession) finishTts(msgKey);
   }
 
   async function playStreamMessage(convId, msgId, text, auto, temp) {
     if (!convId || !msgId || !text || !text.trim()) return;
     const msgKey = ttsKey(convId, msgId);
-    // 幂等：同一条消息已在朗读/生成中时不重复启动（防止回合数据触发与 DOM 触发双启动）
-    if (ttsActiveKey === msgKey && ttsActiveState !== 'idle') return;
     const meta0 = getTtsMeta();
     if (meta0[msgKey] && (meta0[msgKey].segs || 0) > 0) {
       // 已有缓存的音频，直接播放缓存，不再重新合成
@@ -2032,10 +1969,7 @@
       const blob = b64ToBlob(st.audioB64, st.mime || 'audio/wav');
       if (session !== ttsSession || state.currentId !== convId) return;
       await playTtsSegment(msgKey, blob, session);
-      if (session === ttsSession) {
-        markTtsPlayed(msgKey);
-        finishTts(msgKey);
-      }
+      if (session === ttsSession) finishTts(msgKey);
       return;
     }
 
@@ -2049,7 +1983,7 @@
           convId: String(convId),
           msgId: String(msgId),
           ts: Date.now(),
-          temp: true,
+          temp: !!temp,
           segs: 1
         };
         setTtsMeta(meta);
@@ -2087,7 +2021,6 @@
 
   async function playSegmentsLoop(convId, msgId, segs, startIdx, auto, temp, session) {
     const msgKey = ttsKey(convId, msgId);
-    let playedAny = false;
     for (let i = startIdx; i < segs.length; i++) {
       if (session !== ttsSession) return;
       setSpeakBtn(msgKey, 'loading');
@@ -2114,12 +2047,8 @@
         if (session === ttsSession) finishTts(msgKey);
         return;
       }
-      playedAny = true;
     }
-    if (session === ttsSession) {
-      if (playedAny) markTtsPlayed(msgKey);
-      finishTts(msgKey);
-    }
+    if (session === ttsSession) finishTts(msgKey);
   }
 
   async function playMessageSegments(convId, msgId, text, auto, temp) {
@@ -2138,7 +2067,6 @@
       showToast('这条消息没有可朗读的文字', true);
       return;
     }
-    let playedAny = false;
     for (let i = 0; i < n; i++) {
       if (session !== ttsSession) return;
       setSpeakBtn(msgKey, 'loading');
@@ -2170,12 +2098,8 @@
         if (session === ttsSession) finishTts(msgKey);
         return;
       }
-      playedAny = true;
     }
-    if (session === ttsSession) {
-      if (playedAny) markTtsPlayed(msgKey);
-      finishTts(msgKey);
-    }
+    if (session === ttsSession) finishTts(msgKey);
   }
 
   function onSpeakClick(agentEl) {
@@ -2197,55 +2121,23 @@
     playStreamMessage(convId, msgId, text, auto, false);
   }
 
-  // 从回合/线程数据里取最后一条 agent 回复（不依赖 DOM 是否已渲染）
-  function lastAgentFromTurn(turn) {
-    if (!turn || !Array.isArray(turn.items)) return null;
-    for (let i = turn.items.length - 1; i >= 0; i--) {
-      const it = turn.items[i];
-      if (it.type === 'agentMessage' && it.id && it.text && it.text.trim()) {
-        return { id: it.id, text: it.text };
-      }
-    }
-    return null;
-  }
-
-  function lastAgentFromThread(thread) {
-    const turns = (thread && (thread.turns || [])) || [];
-    for (let i = turns.length - 1; i >= 0; i--) {
-      const a = lastAgentFromTurn(turns[i]);
-      if (a) return a;
-    }
-    return null;
-  }
-
-  // 带幂等/meta 守卫的自动朗读触发（DOM 与回合数据共用）
-  function tryAutoSpeakMessage(convId, msgId, text) {
-    if (!convId || !msgId || !text || !text.trim()) return false;
-    const id = ttsKey(convId, msgId);
-    const meta = getTtsMeta();
-    const diag = 'msgId=' + msgId + ' activeKey=' + ttsActiveKey +
-      ' state=' + ttsActiveState + ' meta=' + (meta[id] ? (meta[id].temp ? 'temp' : 'perm') : 'none');
+  function maybeAutoSpeak() {
+    if (!state.currentId) return;
+    const agents = messagesEl.querySelectorAll('.msg.agent');
+    const last = agents[agents.length - 1];
+    if (!last) return;
+    const msgId = last.dataset.msgId;
+    if (!msgId || msgId === turnStartLastMsgId) return;
+    const text = collectAgentText(last);
+    if (!text.trim()) return;
+    const id = ttsKey(state.currentId, msgId);
     // 自愈：空闲状态下清掉残留的归属键，避免误拦新消息
     if (ttsActiveKey && ttsActiveState === 'idle') ttsActiveKey = null;
     // 只拦“同一消息确实正在生成/播放中”的重复触发
-    if (ttsActiveKey === id && ttsActiveState !== 'idle') { console.log('[autoSpeak] 跳过(已在朗读/生成中) ' + diag); return false; }
-    if (meta[id] && !meta[id].temp) return false; // 已完整播放过，跳过
-    console.log('[autoSpeak] 触发 ' + diag);
-    speakMessage(convId, msgId, text, true);
-    return true;
-  }
-
-  function maybeAutoSpeak() {
-    if (!state.currentId) return false;
-    const agents = messagesEl.querySelectorAll('.msg.agent');
-    const last = agents[agents.length - 1];
-    if (!last) return false;
-    const msgId = last.dataset.msgId;
-    const text = collectAgentText(last);
-    if (!msgId) { console.log('[autoSpeak] 跳过(无msgId)'); return false; }
-    if (msgId === turnStartLastMsgId) { console.log('[autoSpeak] 跳过(仍是本轮开始前消息)'); return false; }
-    if (!text.trim()) { console.log('[autoSpeak] 跳过(无文本)'); return false; }
-    return tryAutoSpeakMessage(state.currentId, msgId, text);
+    if (ttsActiveKey === id && ttsActiveState !== 'idle') return;
+    const meta = getTtsMeta();
+    if (meta[id] && !meta[id].temp) return;
+    speakMessage(state.currentId, msgId, text, true);
   }
 
   function currentLastMsgId() {
