@@ -44,6 +44,7 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.Spinner;
@@ -53,6 +54,11 @@ import android.widget.Toast;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.net.ConnectException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import org.json.JSONObject;
 import org.json.JSONArray;
 
@@ -71,12 +77,16 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_DEVICE_STATUS = "cap_device_status";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.7";
+    private static final String APP_VERSION = "10.8";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
 
     private WebView web;
+    private View lanErrorOverlay;
+    private boolean lanWebLoading = false;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private Runnable lanLoadTimeout;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -577,6 +587,14 @@ public class MainActivity extends Activity {
         save.setTextColor(Color.parseColor("#06231C"));
         root.addView(save, lp());
 
+        final TextView lanError = new TextView(this);
+        lanError.setTextColor(Color.parseColor("#FF5D5D"));
+        lanError.setTextSize(13);
+        lanError.setGravity(Gravity.CENTER);
+        lanError.setPadding(0, 10, 0, 0);
+        lanError.setVisibility(View.GONE);
+        root.addView(lanError, lp());
+
         final TextView aboutRow = new TextView(this);
         aboutRow.setText("关于本软件");
         aboutRow.setTextColor(Color.parseColor("#E6EDF3"));
@@ -633,23 +651,44 @@ public class MainActivity extends Activity {
                         return;
                     }
                     if (!url.startsWith("http")) url = "";
-                } else if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                    finishSave(mode[0], url, room, pw,
+                            updateInput.getText().toString().trim(),
+                            effortValues[effortSpinner.getSelectedItemPosition()],
+                            autoSpeakBox.isChecked(), capDeviceBox.isChecked(),
+                            brokerInput.getText().toString().trim(), dialogToDismiss);
+                    return;
+                }
+                // 局域网：先补全协议，再做保存前预检（TCP 4 秒超时），失败留在设置页
+                if (!url.startsWith("http://") && !url.startsWith("https://")) {
                     url = "http://" + url;
                 }
-                SharedPreferences.Editor e = getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
-                e.putString(KEY_MODE, mode[0]);
-                e.putString(KEY_URL, url);
-                e.putString(KEY_ROOM, room);
-                e.putString(KEY_PASSWORD, pw);
-                e.putString(KEY_UPDATE_URL, updateInput.getText().toString().trim());
-                e.putString(KEY_EFFORT, effortValues[effortSpinner.getSelectedItemPosition()]);
-                e.putBoolean(KEY_AUTO_SPEAK, autoSpeakBox.isChecked());
-                e.putBoolean(KEY_CAP_DEVICE_STATUS, capDeviceBox.isChecked());
-                String brokerVal = brokerInput.getText().toString().trim();
-                e.putString(KEY_BROKER, brokerVal.isEmpty() ? RELAY_BROKER : brokerVal);
-                e.apply();
-                setupUi();
-                if (dialogToDismiss != null) dialogToDismiss.dismiss();
+                final String lanUrl = url;
+                final String lanEffort = effortValues[effortSpinner.getSelectedItemPosition()];
+                final boolean lanAutoSpeak = autoSpeakBox.isChecked();
+                final boolean lanCapDevice = capDeviceBox.isChecked();
+                final String lanUpdateUrl = updateInput.getText().toString().trim();
+                final String lanBroker = brokerInput.getText().toString().trim();
+                save.setEnabled(false);
+                save.setText("正在检测地址…");
+                lanError.setVisibility(View.GONE);
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        final String err = checkLanAddress(lanUrl);
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                save.setEnabled(true);
+                                save.setText("保存并连接");
+                                if (err != null) {
+                                    lanError.setText(err);
+                                    lanError.setVisibility(View.VISIBLE);
+                                    return;
+                                }
+                                finishSave(mode[0], lanUrl, room, pw, lanUpdateUrl,
+                                        lanEffort, lanAutoSpeak, lanCapDevice, lanBroker, dialogToDismiss);
+                            }
+                        });
+                    }
+                }).start();
             }
         });
         keyBtn.setOnClickListener(new View.OnClickListener() {
@@ -849,33 +888,19 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                lanWebLoading = true;
                 view.loadUrl(url);
                 return true;
             }
             @Override
+            public void onPageFinished(WebView view, String url) {
+                lanWebLoading = false;
+                if (lanLoadTimeout != null) mainHandler.removeCallbacks(lanLoadTimeout);
+            }
+            @Override
             public void onReceivedError(WebView view, android.webkit.WebResourceRequest request, android.webkit.WebResourceError error) {
                 if (request == null || !request.isForMainFrame()) return;
-                runOnUiThread(new Runnable() {
-                    @Override public void run() {
-                        try {
-                            AlertDialog.Builder b = new AlertDialog.Builder(MainActivity.this);
-                            b.setTitle("无法连接到该地址");
-                            b.setMessage("请检查：\n\n1. 电脑端桥接服务是否已启动（start.bat）；\n2. 地址是否为电脑的局域网 IP（localhost 指向的是手机自己）；\n3. 手机和电脑是否连接同一个 Wi-Fi。");
-                            b.setPositiveButton("重新修改设置", new DialogInterface.OnClickListener() {
-                                @Override public void onClick(DialogInterface d, int which) {
-                                    showSettingsDialog();
-                                }
-                            });
-                            b.setNegativeButton("重试", new DialogInterface.OnClickListener() {
-                                @Override public void onClick(DialogInterface d, int which) {
-                                    try { if (web != null) web.reload(); } catch (Exception ignored) {}
-                                }
-                            });
-                            b.setCancelable(true);
-                            b.show();
-                        } catch (Exception ignored) {}
-                    }
-                });
+                showLanErrorOverlay();
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -897,16 +922,179 @@ public class MainActivity extends Activity {
             }
         });
 
-        root.addView(web, new LinearLayout.LayoutParams(
+        FrameLayout webWrap = new FrameLayout(this);
+        webWrap.addView(web, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        lanErrorOverlay = buildLanErrorOverlay();
+        webWrap.addView(lanErrorOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        lanErrorOverlay.setVisibility(View.GONE);
+        root.addView(webWrap, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
 
         if ("relay".equals(mode)) {
             web.loadUrl("file:///android_asset/www/index.html");
         } else {
-            web.loadUrl(prefs.getString(KEY_URL, ""));
+            final String lanUrl = prefs.getString(KEY_URL, "").trim();
+            if (lanUrl.isEmpty()) {
+                showSettingsDialog();
+                return;
+            }
+            web.loadUrl(lanUrl);
+            lanLoadTimeout = new Runnable() {
+                @Override public void run() {
+                    showLanErrorOverlay();
+                }
+            };
+            mainHandler.postDelayed(lanLoadTimeout, 8000);
         }
 
+    }
+
+    // 局域网加载失败的原生覆盖层（替代弹窗：挂起/超时时也能兜住，不白屏）
+    private View buildLanErrorOverlay() {
+        LinearLayout ov = new LinearLayout(this);
+        ov.setOrientation(LinearLayout.VERTICAL);
+        ov.setGravity(Gravity.CENTER);
+        ov.setBackgroundColor(Color.parseColor("#0B0E14"));
+        ov.setPadding(48, 40, 48, 40);
+
+        TextView title = new TextView(this);
+        title.setText("无法加载该页面");
+        title.setTextColor(Color.parseColor("#E6EDF3"));
+        title.setTextSize(20);
+        title.setGravity(Gravity.CENTER);
+        ov.addView(title, lp());
+
+        TextView sub = new TextView(this);
+        sub.setText("请检查：\n\n1. 电脑端桥接服务是否已启动（start.bat）；\n2. 地址是否为电脑的局域网 IP（localhost 指向的是手机自己）；\n3. 手机和电脑是否连接同一个 Wi-Fi。");
+        sub.setTextColor(Color.parseColor("#8B949E"));
+        sub.setTextSize(14);
+        sub.setLineSpacing(0, 1.6f);
+        sub.setGravity(Gravity.CENTER);
+        sub.setPadding(0, 20, 0, 28);
+        ov.addView(sub, lp());
+
+        Button retry = new Button(this);
+        retry.setText("重试");
+        retry.setBackground(roundedBg(Color.parseColor("#00D2A0"), Color.TRANSPARENT, 999f));
+        retry.setTextColor(Color.parseColor("#06231C"));
+        retry.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                hideLanErrorOverlay();
+                try { if (web != null) web.stopLoading(); } catch (Exception ignored) {}
+                if (web != null) web.reload();
+                restartLanLoadTimeout();
+            }
+        });
+        ov.addView(retry, lp());
+
+        Button back = new Button(this);
+        back.setText("返回设置");
+        back.setBackground(roundedBg(Color.parseColor("#151A23"), Color.parseColor("#4000D2A0"), 999f));
+        back.setTextColor(Color.parseColor("#E6EDF3"));
+        LinearLayout.LayoutParams blp = lp();
+        blp.topMargin = 10;
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                hideLanErrorOverlay();
+                try { if (web != null) web.stopLoading(); } catch (Exception ignored) {}
+                showSettingsDialog();
+            }
+        });
+        ov.addView(back, blp);
+        return ov;
+    }
+
+    private void showLanErrorOverlay() {
+        if (lanErrorOverlay == null) return;
+        if (!"lan".equals(getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_MODE, "lan"))) return;
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                try { lanErrorOverlay.setVisibility(View.VISIBLE); } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private void hideLanErrorOverlay() {
+        if (lanErrorOverlay == null) return;
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                try { lanErrorOverlay.setVisibility(View.GONE); } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private void restartLanLoadTimeout() {
+        if (lanLoadTimeout != null) mainHandler.removeCallbacks(lanLoadTimeout);
+        lanLoadTimeout = new Runnable() {
+            @Override public void run() {
+                showLanErrorOverlay();
+            }
+        };
+        mainHandler.postDelayed(lanLoadTimeout, 8000);
+    }
+
+    // 保存前预检：TCP 连通性测试，4 秒超时
+    private String checkLanAddress(String url) {
+        try {
+            java.net.URL u = new java.net.URL(url);
+            String host = u.getHost();
+            int port = u.getPort();
+            if (port < 0) port = 80;
+            Socket sock = new Socket();
+            try {
+                sock.connect(new InetSocketAddress(host, port), 4000);
+            } finally {
+                try { sock.close(); } catch (Exception ignored) {}
+            }
+            return null;
+        } catch (UnknownHostException e) {
+            return "域名无法解析，请检查地址拼写";
+        } catch (SocketTimeoutException e) {
+            return "地址不可达，请检查 IP 是否正确、手机和电脑是否连接同一个 Wi-Fi";
+        } catch (ConnectException e) {
+            return "电脑端桥接服务未启动，请先运行 start.bat";
+        } catch (Exception e) {
+            return "无法连接该地址：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+        }
+    }
+
+    private void finishSave(String mode, String url, String room, String pw, String updateUrl,
+                            String effort, boolean autoSpeak, boolean capDevice, String broker, AlertDialog dlg) {
+        SharedPreferences.Editor e = getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
+        e.putString(KEY_MODE, mode);
+        e.putString(KEY_URL, url);
+        e.putString(KEY_ROOM, room);
+        e.putString(KEY_PASSWORD, pw);
+        e.putString(KEY_UPDATE_URL, updateUrl);
+        e.putString(KEY_EFFORT, effort);
+        e.putBoolean(KEY_AUTO_SPEAK, autoSpeak);
+        e.putBoolean(KEY_CAP_DEVICE_STATUS, capDevice);
+        e.putString(KEY_BROKER, broker.isEmpty() ? RELAY_BROKER : broker);
+        e.apply();
+        setupUi();
+        if (dlg != null) dlg.dismiss();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (lanErrorOverlay != null && lanErrorOverlay.getVisibility() == View.VISIBLE) {
+            showSettingsDialog();
+            return;
+        }
+        boolean lan = "lan".equals(getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_MODE, "lan"));
+        if (lan && web != null && (lanWebLoading || !web.canGoBack())) {
+            try { web.stopLoading(); } catch (Exception ignored) {}
+            showSettingsDialog();
+            return;
+        }
+        if (web != null && web.canGoBack()) {
+            web.goBack();
+            return;
+        }
+        super.onBackPressed();
     }
 
     private void showSettingsDialog() {
@@ -1144,12 +1332,4 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
     }
 
-    @Override
-    public void onBackPressed() {
-        if (web != null && web.canGoBack()) {
-            web.goBack();
-        } else {
-            super.onBackPressed();
-        }
-    }
 }
