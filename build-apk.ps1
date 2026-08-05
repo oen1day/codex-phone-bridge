@@ -1,11 +1,21 @@
 ﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { 'C:\Users\add\AppData\Local\Android\Sdk' }
-$bt = Join-Path $sdk 'build-tools\34.0.0'
-$platform = Join-Path $sdk 'platforms\android-34'
+$sdk = ''
+if ($env:ANDROID_SDK_ROOT -and (Test-Path $env:ANDROID_SDK_ROOT)) { $sdk = $env:ANDROID_SDK_ROOT }
+elseif ($env:ANDROID_HOME -and (Test-Path $env:ANDROID_HOME)) { $sdk = $env:ANDROID_HOME }
+else {
+  foreach ($cand in @("$env:LOCALAPPDATA\Android\Sdk", 'C:\Android\Sdk', "$env:USERPROFILE\AppData\Local\Android\Sdk")) {
+    if ($cand -and (Test-Path $cand)) { $sdk = $cand; break }
+  }
+}
+if (-not $sdk) { $sdk = 'C:\Users\add\AppData\Local\Android\Sdk' }
+$buildToolsDir = Get-ChildItem (Join-Path $sdk 'build-tools') -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+$platformDir = Get-ChildItem (Join-Path $sdk 'platforms') -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+if (-not $buildToolsDir) { throw "找不到 Android 打包工具: $(Join-Path $sdk 'build-tools')" }
+if (-not $platformDir) { throw "找不到 Android 平台库: $(Join-Path $sdk 'platforms')" }
+$bt = $buildToolsDir.FullName
+$platform = $platformDir.FullName
 $androidJar = Join-Path $platform 'android.jar'
-
-if (-not (Test-Path $bt)) { throw "找不到 Android 打包工具: $bt" }
 if (-not (Test-Path $androidJar)) { throw "找不到 Android 平台库: $androidJar" }
 
 # 找一个 Java 11 以上的运行环境（d8 和 APK 签名需要）

@@ -52,7 +52,7 @@ public class MainActivity extends Activity {
     private static final String KEY_EFFORT = "effort";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "5.6";
+    private static final String APP_VERSION = "6.0";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -454,8 +454,7 @@ public class MainActivity extends Activity {
                 String msg = "";
                 final String[] apkUrl = { "" };
                 final String[] urls = {
-                    updateUrl,
-                    "https://cdn.jsdelivr.net/gh/oen1day/codex-phone-bridge@main/version.json"
+                    updateUrl
                 };
                 String lastErr = "";
                 try {

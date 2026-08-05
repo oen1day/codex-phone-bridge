@@ -8,7 +8,11 @@ const ROOT = __dirname;
 let cfg = {};
 try { cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8')); } catch (_) {}
 const PORT = cfg.port || 8787;
-const PASSWORD = cfg.password || '123456';
+if (!cfg.password) {
+  console.error('phone-bridge: config.json 未配置 password，请先运行 start.bat 自动生成配置');
+  process.exit(1);
+}
+const PASSWORD = cfg.password;
 let cookie = '';
 
 function api(pathname, body) {
@@ -144,7 +148,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '5.6' }
+        serverInfo: { name: 'codex-phone-bridge', version: '6.0' }
       }
     });
     return;

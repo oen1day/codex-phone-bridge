@@ -61,7 +61,7 @@ function loadConfig() {
     : ROOT;
   return Object.assign({
     port: 8787,
-    password: '123456',
+    password: '',
     workspace: docs,
     model: '',
     approvalPolicy: 'on-request',
@@ -78,7 +78,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '5.6';
+const VERSION = '6.0';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -91,12 +91,17 @@ function saveBridgeId(obj) {
 }
 const bridgeId = loadBridgeId();
 if (!bridgeId.shareKey) {
-  bridgeId.shareKey = config.shareKey || crypto.randomBytes(16).toString('hex');
+  bridgeId.shareKey = config.shareKey || crypto.randomBytes(32).toString('hex');
   saveBridgeId(bridgeId);
 }
 if (config.shareKey !== bridgeId.shareKey) {
   config.shareKey = bridgeId.shareKey;
   saveConfig();
+}
+if (!config.password) {
+  config.password = generatePassword();
+  saveConfig();
+  console.log('[config] 已生成新的访问密码（新手机一键配置/手动填写用）');
 }
 if (!config.updateUrl) {
   config.updateUrl = 'https://raw.githubusercontent.com/oen1day/codex-phone-bridge/main/version.json';
@@ -105,9 +110,9 @@ if (!config.updateUrl) {
 if (config.relayEnabled) {
   const room = (config.relayRoomCode || '').trim().toUpperCase();
   if (!room) {
-    config.relayRoomCode = 'K8X5CY';
+    config.relayRoomCode = generateRoomCode();
     saveConfig();
-    console.error('[config] 警告：未找到配对码，已恢复为默认 K8X5CY（请保持手机端一致）');
+    console.log('[config] 已生成新的配对码: ' + config.relayRoomCode);
   } else {
     config.relayRoomCode = room;
   }
@@ -351,7 +356,6 @@ function broadcast(obj) {
 }
 
 // ---------- 内置中继 ----------
-let relayChannel = null;
 const relayChannels = [];
 const bootstrapChannels = [];
 const relayPhones = new Map();
@@ -368,6 +372,13 @@ function generateRoomCode() {
   const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
   let s = '';
   for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
+function generatePassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let s = '';
+  for (let i = 0; i < 16; i++) s += chars[Math.floor(Math.random() * chars.length)];
   return s;
 }
 
@@ -396,7 +407,6 @@ async function startRelay() {
       });
       await ch.start();
       relayChannels.push(ch);
-      if (!relayChannel) relayChannel = ch;
     } catch (e) {
       console.error('[relay] 中继启动失败: ' + broker + ' -> ' + (e && e.message));
     }

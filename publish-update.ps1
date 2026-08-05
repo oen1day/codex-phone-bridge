@@ -78,9 +78,9 @@ function New-ReleaseZip {
   $tmp = Join-Path $env:TEMP ('codexbridge-' + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
   $items = @(
-    'server.js', 'start.bat', 'start.ps1', 'config.json', 'build-apk.ps1',
+    'server.js', 'start.bat', 'start.ps1', 'build-apk.ps1',
     'README.md', 'version.json', 'publish-update.ps1', 'public', 'android',
-    'CodexPhoneBridge.apk', 'phone-mcp.js', 'phone-tool.ps1'
+    'CodexPhoneBridge.apk', 'phone-mcp.js', 'phone-tool.ps1', 'config.example.json'
   )
   foreach ($i in $items) {
     Copy-Item -LiteralPath (Join-Path $root $i) -Destination $tmp -Recurse -Force
