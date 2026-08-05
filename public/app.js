@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '8.2';
+  const APP_VERSION = '8.3';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -1650,6 +1650,13 @@
     return p;
   }
 
+  // 播放当前段的同时，提前请求下一段合成（预取失败不影响主流程，服务端串行排队）
+  function prefetchTtsSegment(convId, msgId, segs, i, temp) {
+    const j = i + 1;
+    if (j >= segs.length) return;
+    ensureTtsSegment(convId, msgId, j, segs[j], temp).catch(() => {});
+  }
+
   function setSpeakBtn(key, state) {
     const btn = speakButtons.get(key);
     if (!btn) return;
@@ -2000,6 +2007,7 @@
         return;
       }
       if (auto && !autoSpeak) continue;
+      prefetchTtsSegment(convId, msgId, segs, i, temp);
       const played = await playTtsSegment(blob, session);
       if (!played) return;
     }
@@ -2047,6 +2055,7 @@
         return;
       }
       if (auto && !autoSpeak) continue;
+      prefetchTtsSegment(convId, msgId, segs, i, temp);
       const played = await playTtsSegment(blob, session);
       if (!played) return;
     }
