@@ -78,7 +78,7 @@ function loadConfig() {
     ttsUrl: 'http://127.0.0.1:8866',
     ttsEmotion: '平静日常',
     ttsSegmentChars: 150,
-    ttsTimeoutMs: 90000
+    ttsTimeoutMs: 300000
   }, cfg);
   if (!merged.workspace) merged.workspace = docs;
   if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '9.2';
+const VERSION = '9.3';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -348,11 +348,12 @@ function handleServerMessage(msg) {
       if (tid) {
         const acc = ((preGenTexts.get(tid) || '') + '\n' + String(item.text)).trim();
         preGenTexts.set(tid, acc);
-        // 提前预生成第一段：回复还在输出时首段音频就开始合成
-        const seg0 = splitTtsSegments(acc)[0];
-        if (seg0) {
-          const auto = turnAutoSpeak.get(tid) !== false;
-          queuePreGen(seg0, auto);
+        const auto = turnAutoSpeak.get(tid) !== false;
+        if (!auto) {
+          // 自动朗读关闭时才预生成首段（供手动点播秒播）；
+          // 自动朗读开启时手机会立即请求，预生成只会排队互抢
+          const seg0 = splitTtsSegments(acc)[0];
+          if (seg0) queuePreGen(seg0, auto);
         }
       }
     }
@@ -366,7 +367,7 @@ function handleServerMessage(msg) {
       preGenTexts.delete(tid);
       const auto = turnAutoSpeak.get(tid) !== false;
       turnAutoSpeak.delete(tid);
-      if (text) queuePreGen(text, auto);
+      if (text && !auto) queuePreGen(text, auto); // 自动朗读开启时跳过整段预生成，避免与实时请求互抢
     }
   }
   console.log('[codex] 事件: ' + msg.method + (msg.params && msg.params.threadId ? ' #' + msg.params.threadId : ''));
