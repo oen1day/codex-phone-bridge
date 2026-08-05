@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.0';
+  const APP_VERSION = '10.1';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -247,6 +247,18 @@
         const r = window.AndroidBridge[msg.method]();
         addSystemLine('📱 电脑请求: ' + (msg.method === 'goHome' ? '返回手机桌面' : '打开电池优化设置'));
         relayChannel.send({ type: 'phone-rpc-response', id, ok: true, result: { started: !!r } }).catch(() => {});
+      } else if (msg.method === 'getDeviceStatus') {
+        if (!window.AndroidBridge || !window.AndroidBridge.getDeviceStatus) throw new Error('当前页面不支持此操作');
+        let r = {};
+        try { r = JSON.parse(window.AndroidBridge.getDeviceStatus() || '{}') || {}; } catch (_) {}
+        if (r.ok === false) throw new Error(r.error || '设备状态查询未开启');
+        addSystemLine('📱 电脑正在读取手机设备状态…');
+        relayChannel.send({ type: 'phone-rpc-response', id, ok: true, result: r.data || r }).catch(() => {});
+      } else if (msg.method === 'getCapabilities') {
+        if (!window.AndroidBridge || !window.AndroidBridge.getCapabilities) throw new Error('当前页面不支持此操作');
+        let caps = {};
+        try { caps = JSON.parse(window.AndroidBridge.getCapabilities() || '{}') || {}; } catch (_) {}
+        relayChannel.send({ type: 'phone-rpc-response', id, ok: true, result: caps }).catch(() => {});
       } else {
         throw new Error('未知手机操作: ' + msg.method);
       }

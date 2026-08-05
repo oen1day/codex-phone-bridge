@@ -55,6 +55,16 @@ async function ensureLogin() {
 
 const TOOLS = [
   {
+    name: 'get_capabilities',
+    description: '查询手机支持的所有能力及其开关状态。每次需要操作手机前先调用本工具，确认能力是否可用；未开启的能力直接告诉用户去手机设置里开启，不要假装能执行。',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_device_status',
+    description: '读取手机设备状态：型号、系统版本、电量百分比、是否充电、网络类型（Wi-Fi/4G/5G）、屏幕分辨率、剩余存储。用于回答“我手机怎么样”“还剩多少电”。需要在手机设置里开启“设备状态查询”能力，未开启时会返回明确提示。',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
     name: 'list_phone_apps',
     description: '列出手机（鳍点AI App）上已安装的常用应用，返回名称和包名。这是读取手机应用列表的推荐方式：手机通过无线中继连接，不需要 USB 数据线、不需要 adb、不需要 USB 调试。直接调用本工具即可；不要检查 USB 设备或运行 adb 命令。需要电脑端桥接窗口正在运行、手机 App 已连接中继。',
     inputSchema: { type: 'object', properties: {} }
@@ -148,7 +158,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '10.0' }
+        serverInfo: { name: 'codex-phone-bridge', version: '10.1' }
       }
     });
     return;
@@ -186,6 +196,10 @@ async function handle(msg) {
         result = await api('/api/phone/app-settings', { package: args.package });
       } else if (name === 'request_phone_battery_exemption') {
         result = await api('/api/phone/ignore-battery', {});
+      } else if (name === 'get_capabilities') {
+        result = await api('/api/phone/capabilities', {});
+      } else if (name === 'get_device_status') {
+        result = await api('/api/phone/device-status', {});
       } else {
         throw new Error('未知工具: ' + name);
       }

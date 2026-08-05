@@ -12,14 +12,21 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.os.BatteryManager;
 import android.os.Environment;
 import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.StatFs;
 import android.provider.Settings;
+import android.telephony.TelephonyManager;
 import android.util.Base64;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -57,9 +64,10 @@ public class MainActivity extends Activity {
     private static final String KEY_UPDATE_URL = "update_url";
     private static final String KEY_EFFORT = "effort";
     private static final String KEY_AUTO_SPEAK = "auto_speak";
+    private static final String KEY_CAP_DEVICE_STATUS = "cap_device_status";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.0";
+    private static final String APP_VERSION = "10.1";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -127,6 +135,87 @@ public class MainActivity extends Activity {
         public boolean getAutoSpeak() {
             SharedPreferences p = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             return p.getBoolean(KEY_AUTO_SPEAK, true);
+        }
+
+        // 能力探测：列出手机支持的所有命令与开关状态（新能力默认关闭）
+        @JavascriptInterface
+        public String getCapabilities() {
+            SharedPreferences p = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            JSONObject o = new JSONObject();
+            try {
+                o.put("list_apps", true);
+                o.put("uninstall_app", true);
+                o.put("open_app", true);
+                o.put("open_app_background", true);
+                o.put("go_home", true);
+                o.put("app_settings", true);
+                o.put("ignore_battery", true);
+                o.put("device_status", p.getBoolean(KEY_CAP_DEVICE_STATUS, false));
+            } catch (Exception ignored) {}
+            return o.toString();
+        }
+
+        // 设备状态查询（设置里默认关闭）
+        @JavascriptInterface
+        public String getDeviceStatus() {
+            SharedPreferences p = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            if (!p.getBoolean(KEY_CAP_DEVICE_STATUS, false)) {
+                return "{\"ok\":false,\"error\":\"设备状态查询未开启，请在设置里开启后重试\"}";
+            }
+            JSONObject o = new JSONObject();
+            try {
+                o.put("ok", true);
+                JSONObject d = new JSONObject();
+                d.put("manufacturer", Build.MANUFACTURER);
+                d.put("model", Build.MODEL);
+                d.put("androidVersion", Build.VERSION.RELEASE);
+                d.put("sdkInt", Build.VERSION.SDK_INT);
+                IntentFilter bf = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+                Intent b = registerReceiver(null, bf);
+                if (b != null) {
+                    int level = b.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                    int scale = b.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+                    int status = b.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+                    d.put("batteryPercent", scale > 0 ? Math.round(level * 100f / scale) : -1);
+                    d.put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL);
+                } else {
+                    d.put("batteryPercent", -1);
+                    d.put("charging", false);
+                }
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                String netType = "unknown";
+                if (cm != null) {
+                    Network n = cm.getActiveNetwork();
+                    NetworkCapabilities nc = n != null ? cm.getNetworkCapabilities(n) : null;
+                    if (nc != null) {
+                        if (nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                            netType = "wifi";
+                        } else if (nc.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                            netType = "mobile";
+                            try {
+                                TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+                                int nt = tm != null ? tm.getDataNetworkType() : TelephonyManager.NETWORK_TYPE_UNKNOWN;
+                                if (nt == TelephonyManager.NETWORK_TYPE_NR) netType = "5g";
+                                else if (nt >= TelephonyManager.NETWORK_TYPE_LTE) netType = "4g";
+                                else if (nt >= TelephonyManager.NETWORK_TYPE_HSPA) netType = "3g";
+                            } catch (Exception ignored) {}
+                        }
+                    }
+                }
+                d.put("networkType", netType);
+                DisplayMetrics dm = getResources().getDisplayMetrics();
+                d.put("screenWidth", dm.widthPixels);
+                d.put("screenHeight", dm.heightPixels);
+                StatFs sf = new StatFs(Environment.getDataDirectory().getAbsolutePath());
+                long total = sf.getTotalBytes();
+                long avail = sf.getAvailableBytes();
+                d.put("storageTotalGB", Math.round(total / 1073741824.0 * 10) / 10.0);
+                d.put("storageFreeGB", Math.round(avail / 1073741824.0 * 10) / 10.0);
+                o.put("data", d);
+            } catch (Exception e) {
+                try { o.put("ok", false); o.put("error", "读取设备状态失败: " + e.getMessage()); } catch (Exception ignored) {}
+            }
+            return o.toString();
         }
 
         private String ttsDir() {
@@ -454,6 +543,18 @@ public class MainActivity extends Activity {
         autoSpeakBox.setChecked(curAutoSpeak);
         root.addView(autoSpeakBox, lp());
 
+        final TextView capLabel = new TextView(this);
+        capLabel.setText("能力开关（默认关闭，未开启时 AI 会提示去设置开启）");
+        capLabel.setTextColor(Color.parseColor("#8B949E"));
+        root.addView(capLabel, lp());
+
+        final CheckBox capDeviceBox = new CheckBox(this);
+        capDeviceBox.setText("设备状态查询（型号/电量/网络/存储）");
+        capDeviceBox.setTextColor(Color.parseColor("#E6EDF3"));
+        boolean curDevice = initial != null && initial.length > 8 && "true".equalsIgnoreCase(initial[8]);
+        capDeviceBox.setChecked(curDevice);
+        root.addView(capDeviceBox, lp());
+
         final EditText brokerInput = new EditText(this);
         brokerInput.setHint("中继服务器地址（一般不用改）");
         if (initial != null && initial.length > 6 && !initial[6].isEmpty()) brokerInput.setText(initial[6]);
@@ -520,6 +621,7 @@ public class MainActivity extends Activity {
                 e.putString(KEY_UPDATE_URL, updateInput.getText().toString().trim());
                 e.putString(KEY_EFFORT, effortValues[effortSpinner.getSelectedItemPosition()]);
                 e.putBoolean(KEY_AUTO_SPEAK, autoSpeakBox.isChecked());
+                e.putBoolean(KEY_CAP_DEVICE_STATUS, capDeviceBox.isChecked());
                 String brokerVal = brokerInput.getText().toString().trim();
                 e.putString(KEY_BROKER, brokerVal.isEmpty() ? RELAY_BROKER : brokerVal);
                 e.apply();
@@ -771,7 +873,8 @@ public class MainActivity extends Activity {
                 prefs.getString(KEY_UPDATE_URL, ""),
                 prefs.getString(KEY_EFFORT, "medium"),
                 prefs.getString(KEY_BROKER, RELAY_BROKER),
-                String.valueOf(prefs.getBoolean(KEY_AUTO_SPEAK, true))
+                String.valueOf(prefs.getBoolean(KEY_AUTO_SPEAK, true)),
+                String.valueOf(prefs.getBoolean(KEY_CAP_DEVICE_STATUS, false))
         };
         final AlertDialog dlg = new AlertDialog.Builder(this)
                 .setTitle("连接设置")

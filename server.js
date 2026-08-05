@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.0';
+const VERSION = '10.1';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -1335,6 +1335,10 @@ async function apiDispatch(method, params, clientId) {
     }
     case 'phoneIgnoreBattery':
       return phoneRpc('requestIgnoreBattery', {}, 30000);
+    case 'phoneDeviceStatus':
+      return phoneRpc('getDeviceStatus', {}, 30000);
+    case 'phoneCapabilities':
+      return phoneRpc('getCapabilities', {}, 30000);
     default:
       throw new Error('未知方法: ' + method);
   }
@@ -1623,6 +1627,14 @@ async function handleApi(req, res, url) {
     }
     if (p === '/api/phone/ignore-battery' && req.method === 'POST') {
       sendJson(res, 200, await apiDispatch('phoneIgnoreBattery', {}));
+      return;
+    }
+    if (p === '/api/phone/device-status' && req.method === 'POST') {
+      sendJson(res, 200, await apiDispatch('phoneDeviceStatus', {}));
+      return;
+    }
+    if (p === '/api/phone/capabilities' && req.method === 'POST') {
+      sendJson(res, 200, await apiDispatch('phoneCapabilities', {}));
       return;
     }
     sendJson(res, 404, { error: 'Not found' });
