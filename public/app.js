@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '5.4';
+  const APP_VERSION = '5.5';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 120;
   const STUCK_TOTAL_SEC = 480;
@@ -242,6 +242,8 @@
           const ch = await tryRelayBroker(broker);
           relayChannel = ch;
           try { localStorage.setItem('workingBroker', broker); } catch (_) {}
+          testPairing();
+          loadThreads();
           break;
         } catch (e) {
           lastErr = (e && e.message) || lastErr;
@@ -276,9 +278,12 @@
               setStatus('中继已连接');
               showToast('中继已连接');
               addSystemLine('中继已连接 · ' + new Date().toLocaleTimeString());
+              resolve(ch);
+            } else {
+              setStatus('中继已连接');
+              addSystemLine('中继已恢复 · ' + new Date().toLocaleTimeString());
               testPairing();
               loadThreads();
-              resolve(ch);
             }
           } else {
             setStatus(s, true);
@@ -388,6 +393,7 @@
       const data = await apiCall('threads');
       state.threads = Array.isArray(data) ? data : (data.threads || data.data || []);
       renderThreads();
+      if (!state.running) setStatus('已连接');
     } catch (e) {
       setStatus('无法读取会话列表', true);
       showToast('读取会话列表失败', true);
