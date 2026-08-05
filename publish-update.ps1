@@ -85,6 +85,8 @@ function New-ReleaseZip {
   foreach ($i in $items) {
     Copy-Item -LiteralPath (Join-Path $root $i) -Destination $tmp -Recurse -Force
   }
+  $ksJunk = Join-Path $tmp 'android\debug.keystore'
+  if (Test-Path $ksJunk) { Remove-Item -LiteralPath $ksJunk -Force }
   $outZip = Join-Path $root 'CodexPhoneBridge-PC.zip'
   if (Test-Path $outZip) { Remove-Item -LiteralPath $outZip -Force }
   $zip = [System.IO.Compression.ZipFile]::Open($outZip, [System.IO.Compression.ZipArchiveMode]::Create)
