@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.1';
+  const APP_VERSION = '10.2';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -47,6 +47,7 @@
   let relayPending = new Map();
   let relayRpcId = 0;
   let relayConnecting = false;
+  let relayFailStreak = 0;
 
   function stopAllRelayChannels() {
     for (const ch of relayChannelsSet) {
@@ -251,7 +252,11 @@
         if (!window.AndroidBridge || !window.AndroidBridge.getDeviceStatus) throw new Error('当前页面不支持此操作');
         let r = {};
         try { r = JSON.parse(window.AndroidBridge.getDeviceStatus() || '{}') || {}; } catch (_) {}
-        if (r.ok === false) throw new Error(r.error || '设备状态查询未开启');
+        if (r.ok === false) {
+          const e = new Error(r.error || '设备状态查询未开启');
+          e.business = true;
+          throw e;
+        }
         addSystemLine('📱 电脑正在读取手机设备状态…');
         relayChannel.send({ type: 'phone-rpc-response', id, ok: true, result: r.data || r }).catch(() => {});
       } else if (msg.method === 'getCapabilities') {
@@ -263,7 +268,7 @@
         throw new Error('未知手机操作: ' + msg.method);
       }
     } catch (e) {
-      relayChannel.send({ type: 'phone-rpc-response', id, ok: false, error: (e && e.message) || '操作失败' }).catch(() => {});
+      relayChannel.send({ type: 'phone-rpc-response', id, ok: false, error: (e && e.message) || '操作失败', business: !!(e && e.business) }).catch(() => {});
     }
   }
 
@@ -359,6 +364,7 @@
         },
         onStatus: (s) => {
           if (s === 'connected') {
+            relayFailStreak = 0;
             if (!ch._connected) {
               ch._connected = true;
               setStatus('中继已连接');
@@ -377,11 +383,27 @@
               addSystemLine('中继已恢复 · ' + new Date().toLocaleTimeString());
               testPairing();
               loadThreads();
+              resumeTurnIfActive();
             }
           } else {
-            setStatus(s, true);
+            relayFailStreak++;
+            if (state.running) {
+              state.running = false;
+              state.turnId = null;
+              updateThinkingIndicator(false);
+              stopTurnPolling();
+              stopTurnWatchdog();
+              $('interruptBtn').classList.add('hidden');
+            }
             rejectPendingRelay('中继连接断开，正在重连…');
-            if (s.indexOf('失败') >= 0) showToast(s, true);
+            if (relayFailStreak >= 3) {
+              setStatus('电脑端未运行，请检查电脑上的 start.bat 窗口', true);
+              addSystemLine('⚠️ 电脑端连接已断开：请确认电脑上的桥接窗口（start.bat）还在运行。');
+              showToast('电脑端未运行，请检查 start.bat 窗口', true);
+            } else {
+              setStatus(s, true);
+              if (s.indexOf('失败') >= 0) showToast(s, true);
+            }
             if (!ch._connected) fail(new Error(s || '连接失败'));
           }
         }
@@ -1116,6 +1138,24 @@
     }
   }
 
+  // 断线重连后，如果电脑端回合其实还在跑，恢复轮询与看门狗
+  function resumeTurnIfActive() {
+    if (!state.currentId) return;
+    apiCall('threadReadPage', { threadId: state.currentId, limit: 10 }).then((data) => {
+      const thread = data.thread || {};
+      if (thread.status && thread.status.type === 'active') {
+        state.running = true;
+        const turns = data.turns || [];
+        state.turnId = (turns.length && turns[turns.length - 1].id) || null;
+        turnStartAt = Date.now();
+        lastTurnActivityAt = Date.now();
+        updateThinkingIndicator(true);
+        startTurnPolling();
+        startTurnWatchdog();
+      }
+    }).catch(() => {});
+  }
+
   function startTurnWatchdog() {
     stopTurnWatchdog();
     turnWatchdog = setInterval(() => {
@@ -1246,6 +1286,11 @@
 
   // ---------- send ----------
   async function send() {
+    if (relayCfg && !(relayChannel && relayChannel.ready)) {
+      setStatus('电脑端未运行，请检查电脑上的 start.bat 窗口', true);
+      showToast('电脑端未运行，请检查电脑上的 start.bat 窗口', true);
+      return;
+    }
     stopSpeaking(); // 发送即停旧语音播放并取消旧合成
     const text = inputBox.value.trim();
     const images = state.pendingImages.slice();

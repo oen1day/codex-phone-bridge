@@ -16,6 +16,30 @@ const UPLOAD_DIR = path.join(ROOT, 'uploads');
 const TTS_DIR = path.join(UPLOAD_DIR, 'tts');
 const PHONE_THREADS_PATH = path.join(ROOT, 'phone-threads.json');
 
+// 崩溃兜底：任何漏网的 Promise/异常都不能让整个服务静默退出
+function logBridge(line) {
+  try {
+    const dir = path.join(ROOT, 'logs');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'bridge.log'), new Date().toISOString() + ' ' + line + '\n');
+  } catch (_) {}
+}
+process.on('unhandledRejection', (reason) => {
+  const text = (reason && reason.stack) ? reason.stack : String(reason);
+  try { console.error('[crash-guard] unhandledRejection:', text); } catch (_) {}
+  logBridge('[crash-guard] unhandledRejection: ' + text);
+});
+process.on('uncaughtException', (err) => {
+  const text = (err && err.stack) ? err.stack : String(err);
+  try { console.error('[crash-guard] uncaughtException:', text); } catch (_) {}
+  logBridge('[crash-guard] uncaughtException: ' + text);
+  // 先给日志一点刷新时间，再退出交给 start.ps1 自动重启
+  setTimeout(() => { try { process.exit(1); } catch (_) {} }, 1200);
+});
+
+// 业务拒绝（能力未开启、权限被拒等）：对调用方是正常回答，不是服务器故障
+class BusinessError extends Error {}
+
 let phoneThreads = {};
 try {
   const raw = JSON.parse(fs.readFileSync(PHONE_THREADS_PATH, 'utf8')) || {};
@@ -87,7 +111,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.1';
+const VERSION = '10.2';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -519,7 +543,10 @@ async function onRelayMessage(msg, ch) {
     if (p) {
       phoneRpcPending.delete(msg.id);
       if (msg.ok) p.resolve(msg.result);
-      else p.reject(new Error(msg.error || '手机操作失败'));
+      else {
+        const e = msg.business ? new BusinessError(msg.error || '手机操作失败') : new Error(msg.error || '手机操作失败');
+        p.reject(e);
+      }
     }
     return;
   }
@@ -1406,13 +1433,16 @@ function readBody(req, limit) {
 }
 
 function sendJson(res, status, obj) {
-  const body = JSON.stringify(obj);
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(body),
-    'Cache-Control': 'no-store'
-  });
-  res.end(body);
+  try {
+    if (res.writableEnded || res.destroyed) return;
+    const body = JSON.stringify(obj);
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': Buffer.byteLength(body),
+      'Cache-Control': 'no-store'
+    });
+    res.end(body);
+  } catch (_) {}
 }
 
 function apiError(res, err) {
@@ -1639,7 +1669,11 @@ async function handleApi(req, res, url) {
     }
     sendJson(res, 404, { error: 'Not found' });
   } catch (e) {
-    apiError(res, e);
+    if (e instanceof BusinessError) {
+      sendJson(res, 200, { ok: false, error: e.message });
+    } else {
+      apiError(res, e);
+    }
   }
 }
 

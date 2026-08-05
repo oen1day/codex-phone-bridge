@@ -158,7 +158,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '10.1' }
+        serverInfo: { name: 'codex-phone-bridge', version: '10.2' }
       }
     });
     return;
@@ -202,6 +202,14 @@ async function handle(msg) {
         result = await api('/api/phone/device-status', {});
       } else {
         throw new Error('未知工具: ' + name);
+      }
+      if (result && typeof result === 'object' && result.ok === false && result.error) {
+        send({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: { content: [{ type: 'text', text: result.error }], isError: false }
+        });
+        return;
       }
       send({
         jsonrpc: '2.0',

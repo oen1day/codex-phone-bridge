@@ -75,4 +75,19 @@ Write-Host ''
 $logDir = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $bridgeLog = Join-Path $logDir 'bridge.log'
-& $node (Join-Path $root 'server.js') 2>&1 | Tee-Object -FilePath $bridgeLog -Append
+$restartLeft = 3
+while ($restartLeft -gt 0) {
+  & $node (Join-Path $root 'server.js') 2>&1 | Tee-Object -FilePath $bridgeLog -Append
+  $code = $LASTEXITCODE
+  if ($code -eq 0) { break }
+  $restartLeft--
+  Write-Host ''
+  Write-Host "服务异常退出（退出码 $code），日志见 logs\bridge.log" -ForegroundColor Red
+  if ($restartLeft -gt 0) {
+    Write-Host "5 秒后自动重启，剩余 $restartLeft 次机会（按 Ctrl+C 取消）" -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
+  } else {
+    Write-Host '连续重启失败，请打开 logs\bridge.log 查看原因后重试。' -ForegroundColor Red
+    Read-Host '按回车退出'
+  }
+}
