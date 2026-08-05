@@ -112,7 +112,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.4';
+const VERSION = '10.5';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
