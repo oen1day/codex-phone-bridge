@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '7.1';
+  const APP_VERSION = '7.2';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -30,7 +30,6 @@
     try { currentEffort = window.AndroidBridge.getEffort() || 'medium'; } catch (_) {}
   }
   if (!EFFORT_LABELS[currentEffort]) currentEffort = 'medium';
-  autoSpeak = readAutoSpeakPref();
 
   function getPersistentDeviceId() {
     if (window.AndroidBridge && window.AndroidBridge.getDeviceId) {
@@ -79,6 +78,7 @@
   let turnStartLastMsgId = null;
   let quotedMsg = null;
   let autoSpeak = true;
+  autoSpeak = readAutoSpeakPref();
   const speakButtons = new Map();
   const ttsMem = new Map();
   const ttsGenerating = new Map();
