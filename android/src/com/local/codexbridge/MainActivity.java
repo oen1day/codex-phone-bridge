@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private static final String KEY_AUTO_SPEAK = "auto_speak";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "7.5";
+    private static final String APP_VERSION = "7.6";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -598,7 +598,7 @@ public class MainActivity extends Activity {
                             } else if (cmp > 0) {
                                 msg = "发现新版本 v" + v;
                             } else {
-                                msg = "发现回退版本 v" + v + "（当前 v" + APP_VERSION + "），正在下载";
+                                msg = "已是最新版本 v" + APP_VERSION + "（服务器版本较旧 v" + v + "）";
                             }
                             ok = true;
                             break;
