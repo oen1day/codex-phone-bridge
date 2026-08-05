@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '7.9';
+const VERSION = '8.0';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -339,6 +339,28 @@ function handleServerMessage(msg) {
     console.log('[codex] 请求: ' + msg.method + (msg.params && msg.params.threadId ? ' #' + msg.params.threadId : ''));
     broadcast({ type: 'approval-request', requestId: msg.id, method: msg.method, params: msg.params || {} });
     return;
+  }
+  // 回复完成 → 自动预生成朗读音频
+  if (msg.method === 'item/completed') {
+    const item = params.item || {};
+    if (item.type === 'agentMessage' && item.id && item.text) {
+      const tid = (params.turn && params.turn.id) || activeTurn.turnId;
+      if (tid) {
+        preGenTexts.set(tid, ((preGenTexts.get(tid) || '') + '\n' + String(item.text)).trim());
+      }
+    }
+  } else if (msg.method === 'turn/started') {
+    const tid = params.turn && params.turn.id;
+    if (tid) preGenTexts.set(tid, '');
+  } else if (msg.method === 'turn/completed') {
+    const tid = (params.turn && params.turn.id) || activeTurn.turnId;
+    if (tid) {
+      const text = preGenTexts.get(tid) || '';
+      preGenTexts.delete(tid);
+      const auto = turnAutoSpeak.get(tid) !== false;
+      turnAutoSpeak.delete(tid);
+      if (text) queuePreGen(text, auto);
+    }
   }
   console.log('[codex] 事件: ' + msg.method + (msg.params && msg.params.threadId ? ' #' + msg.params.threadId : ''));
   broadcast({ type: 'notification', method: msg.method, params: msg.params || {} });
@@ -619,6 +641,67 @@ function splitTtsText(text, maxChars) {
   return segs;
 }
 
+// 与手机端 public/app.js 完全一致的清洗逻辑（保证缓存 key 一致）
+function cleanTtsText(text) {
+  let s = String(text || '');
+  s = s.replace(/```[\s\S]*?```/g, ' ').replace(/~~~[\s\S]*?~~~/g, ' ');
+  s = s.replace(/`([^`]*)`/g, '$1');
+  s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  s = s.replace(/https?:\/\/[^\s，。！？；、\)\],!?;:<>'"\u4e00-\u9fff]+/g, ' ');
+  s = s.replace(/^\s{0,3}(#{1,6}\s+|>\s*|\*\s+|-{1,2}\s+|\d+[.、]\s+)/gm, ' ');
+  s = s.replace(/(\*\*|__|\*|_|~~)/g, '');
+  s = s.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, ' ');
+  s = s.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n');
+  return s.trim();
+}
+
+// 与手机端 public/app.js 完全一致的分段逻辑
+function splitTtsSegments(text) {
+  const clean = cleanTtsText(text);
+  if (!clean) return [];
+  const MAX = 150;
+  const FIRST_MAX = 80;
+  const units = clean.split(/(?<=[。！？…!?；;])|\n/).map(x => x.trim()).filter(Boolean);
+  const segs = [];
+  let cur = '';
+  const flush = () => { if (cur) { segs.push(cur); cur = ''; } };
+  for (const u of units) {
+    if (u.length > MAX) {
+      const pieces = u.split(/(?<=[，,、])/);
+      for (let p of pieces) {
+        p = (p || '').trim();
+        if (!p) continue;
+        while (p.length > MAX) {
+          cur += p.slice(0, MAX);
+          flush();
+          p = p.slice(MAX);
+        }
+        if (cur && cur.length + p.length > MAX) flush();
+        cur += p;
+      }
+    } else {
+      if (cur && cur.length + u.length > MAX) flush();
+      cur += u;
+    }
+  }
+  flush();
+  if (segs.length > 1 && segs[0].length > FIRST_MAX) {
+    const first = segs[0];
+    let cut = -1;
+    for (let i = Math.min(FIRST_MAX, first.length) - 1; i >= 0; i--) {
+      if (/[。！？；!?;]/.test(first[i])) { cut = i + 1; break; }
+    }
+    if (cut < 0) {
+      for (let i = Math.min(FIRST_MAX, first.length) - 1; i >= 0; i--) {
+        if (/[，、,]/.test(first[i])) { cut = i + 1; break; }
+      }
+    }
+    if (cut < 0) cut = FIRST_MAX;
+    segs.splice(0, 1, first.slice(0, cut), first.slice(cut));
+  }
+  return segs.filter(s => s.trim());
+}
+
 async function ttsSynthesizeOne(seg) {
   const base = String(config.ttsUrl || 'http://127.0.0.1:8866').replace(/\/+$/, '');
   const ctrl = new AbortController();
@@ -717,6 +800,122 @@ function cancelTtsJob(jobId) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ job_id: jobId || '' })
   }).catch(() => {});
+}
+
+// ---------- 回复完成后的声音预生成 ----------
+const preGenQueue = [];
+const preGenTexts = new Map();   // turnId -> 累积的 AI 回复文本
+const turnAutoSpeak = new Map(); // turnId -> 是否开启自动朗读
+let preGenRunning = false;
+let preGenCtrl = null;
+let preGenJobId = '';
+let ttsRealTimeBusy = false;
+
+function ttsCacheReady(clean) {
+  if (!clean) return false;
+  return fs.existsSync(path.join(TTS_DIR, ttsCacheKey(clean) + '.wav'));
+}
+
+// 计算第一段之后剩余的文本（容忍首段拼接时去掉的空格/换行）
+function restAfterFirst(clean, first) {
+  let i = 0;
+  let j = 0;
+  while (i < first.length && j < clean.length) {
+    if (first[i] === clean[j]) {
+      i++;
+      j++;
+    } else if (/\s/.test(clean[j])) {
+      j++;
+    } else if (/\s/.test(first[i])) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return clean.slice(j).trim();
+}
+
+function ttsStatusFor(text) {
+  const clean = cleanTtsText(text || '');
+  if (!clean) return { ready: false };
+  const fullFile = path.join(TTS_DIR, ttsCacheKey(clean) + '.wav');
+  if (fs.existsSync(fullFile)) {
+    return { ready: true, partial: false, mime: 'audio/wav', audioB64: fs.readFileSync(fullFile).toString('base64') };
+  }
+  // 自动朗读关闭时可能只预生成了第一段
+  const segs = splitTtsSegments(clean);
+  if (segs.length > 1) {
+    const firstFile = path.join(TTS_DIR, ttsCacheKey(segs[0]) + '.wav');
+    if (fs.existsSync(firstFile)) {
+      return {
+        ready: true,
+        partial: true,
+        mime: 'audio/wav',
+        audioB64: fs.readFileSync(firstFile).toString('base64'),
+        restText: restAfterFirst(clean, segs[0])
+      };
+    }
+  }
+  return { ready: false };
+}
+
+function queuePreGen(text, autoSpeak) {
+  const clean = cleanTtsText(text);
+  if (!clean) return;
+  let target = clean;
+  if (autoSpeak === false) {
+    // 自动朗读关闭：只预生成第一段，供手动点播秒播
+    const segs = splitTtsSegments(clean);
+    if (segs.length > 1) target = segs[0];
+  }
+  if (ttsCacheReady(target)) return;
+  const key = ttsCacheKey(target);
+  if (preGenQueue.some(j => j.key === key)) return;
+  preGenQueue.push({ key, text: target, ts: Date.now() });
+  if (preGenQueue.length > 5) preGenQueue.shift(); // 旧任务丢弃，防止堆积
+  processPreGenQueue();
+}
+
+function processPreGenQueue() {
+  if (preGenRunning || ttsRealTimeBusy) return;
+  const job = preGenQueue.shift();
+  if (!job) return;
+  preGenRunning = true;
+  const jobId = 'pre' + Date.now().toString(36) + '-' + (++ttsStreamSeq);
+  preGenJobId = jobId;
+  const frames = [];
+  try {
+    const r = readTtsStreamFrames(job.text, jobId, (frame) => frames.push(frame), () => {});
+    preGenCtrl = r.ctrl;
+    r.task.then(() => {
+      if (frames.length) {
+        const wav = concatWavs(frames);
+        fs.mkdirSync(TTS_DIR, { recursive: true });
+        fs.writeFileSync(path.join(TTS_DIR, job.key + '.wav'), wav);
+        pruneTtsCache();
+        console.log('[tts] 预生成完成: ' + job.key.slice(0, 8) + '（' + frames.length + ' 段）');
+      }
+    }).catch(() => {}).finally(() => {
+      preGenRunning = false;
+      preGenCtrl = null;
+      preGenJobId = '';
+      processPreGenQueue();
+    });
+  } catch (e) {
+    preGenRunning = false;
+    preGenCtrl = null;
+    preGenJobId = '';
+    processPreGenQueue();
+  }
+}
+
+function cancelPreGen() {
+  if (preGenRunning && preGenJobId) cancelTtsJob(preGenJobId);
+  if (preGenCtrl) {
+    try { preGenCtrl.abort(); } catch (_) {}
+    preGenCtrl = null;
+  }
+  preGenQueue.length = 0; // 实时请求优先，清掉排队中的预生成
 }
 
 function readTtsStreamFrames(text, jobId, onFrame, onEnd) {
@@ -895,6 +1094,7 @@ async function apiDispatch(method, params, clientId) {
         if (respTurn && threadId) {
           turnThreads.set(respTurn, threadId);
           activeTurn = { turnId: respTurn, threadId };
+          turnAutoSpeak.set(respTurn, body.autoSpeak !== false);
         }
       }
       console.log('[codex] turn/start 返回: ' + (result && result.turn ? result.turn.id : 'ok'));
@@ -925,18 +1125,33 @@ async function apiDispatch(method, params, clientId) {
     case 'ping':
       return { ok: true, room: config.relayRoomCode, version: VERSION, time: Date.now() };
     case 'ttsGenerate': {
-      const buf = await ttsGenerate(params.text);
-      return { ok: true, mime: 'audio/wav', audioB64: buf.toString('base64') };
+      cancelPreGen();
+      ttsRealTimeBusy = true;
+      try {
+        const buf = await ttsGenerate(params.text);
+        return { ok: true, mime: 'audio/wav', audioB64: buf.toString('base64') };
+      } finally {
+        ttsRealTimeBusy = false;
+        processPreGenQueue();
+      }
     }
     case 'ttsStreamStart': {
+      cancelPreGen();
+      ttsRealTimeBusy = true;
       const text = String(params.text || '').replace(/\s+/g, ' ').trim();
-      if (!text) throw new Error('没有可朗读的文字');
+      if (!text) {
+        ttsRealTimeBusy = false;
+        processPreGenQueue();
+        throw new Error('没有可朗读的文字');
+      }
       const sid = 'ts' + Date.now().toString(36) + '-' + (++ttsStreamSeq);
       const entry = { timer: null, ctrl: null, done: false };
       ttsStreams.set(sid, entry);
       const finish = (ok, error) => {
         if (entry.done) return;
         entry.done = true;
+        ttsRealTimeBusy = false;
+        processPreGenQueue();
         if (entry.timer) clearTimeout(entry.timer);
         ttsStreams.delete(sid);
         broadcastTts({ type: 'tts-stream-end', id: sid, ok, error: error || '', to: clientId });
@@ -963,12 +1178,17 @@ async function apiDispatch(method, params, clientId) {
       const entry = ttsStreams.get(params.id);
       if (entry) {
         entry.done = true;
+        ttsRealTimeBusy = false;
+        processPreGenQueue();
         if (entry.timer) clearTimeout(entry.timer);
         cancelTtsJob(params.id);
         try { entry.ctrl && entry.ctrl.abort(); } catch (_) {}
         ttsStreams.delete(params.id);
       }
       return { ok: true };
+    }
+    case 'ttsStatus': {
+      return ttsStatusFor(params.text);
     }
     case 'phoneApps':
       return phoneRpc('listApps', {}, 30000);
@@ -1233,6 +1453,11 @@ async function handleApi(req, res, url) {
       const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
       cancelTtsJob(body.job_id);
       sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (p === '/api/tts/status' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      sendJson(res, 200, ttsStatusFor(body.text));
       return;
     }
     if (p === '/api/phone/apps' && req.method === 'POST') {

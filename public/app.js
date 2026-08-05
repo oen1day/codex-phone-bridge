@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '7.9';
+  const APP_VERSION = '8.0';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -125,6 +125,10 @@
         break;
       case 'ttsGenerate':
         url = '/api/tts';
+        init = { method: 'POST', headers: json(), body: JSON.stringify({ text: (params && params.text) || '' }) };
+        break;
+      case 'ttsStatus':
+        url = '/api/tts/status';
         init = { method: 'POST', headers: json(), body: JSON.stringify({ text: (params && params.text) || '' }) };
         break;
       default:
@@ -1203,7 +1207,8 @@
         threadId: state.currentId,
         text: sendText,
         images: images.map(i => ({ name: i.name, data: i.dataUrl })),
-        effort: currentEffort
+        effort: currentEffort,
+        autoSpeak: autoSpeak
       });
       const turn = data.turn || data;
       if (turn && turn.id) {
@@ -1795,37 +1800,27 @@
     setSpeakBtn(key, 'idle');
   }
 
-  async function playStreamMessage(convId, msgId, text, auto, temp) {
-    if (!convId || !msgId || !text || !text.trim()) return;
+  async function tryTtsStatus(text) {
+    try {
+      const st = await apiCall('ttsStatus', { text: text || '' }, 15000);
+      if (st && st.ready && st.audioB64) return st;
+    } catch (_) {}
+    return null;
+  }
+
+  async function runTtsStream(convId, msgId, streamText, startIdx, auto, temp, session) {
     const msgKey = ttsKey(convId, msgId);
-    const meta0 = getTtsMeta();
-    if (meta0[msgKey] && (meta0[msgKey].segs || 0) > 0) {
-      // 已有缓存的音频，直接播放缓存，不再重新合成
-      playMessageSegments(convId, msgId, text, auto, !!meta0[msgKey].temp);
-      return;
-    }
-    stopSpeaking();
-    const session = ++ttsSession;
-    ttsActiveKey = msgKey;
-    const clean = cleanTtsText(text);
-    if (!clean) {
-      finishTts(msgKey);
-      showToast('这条消息没有可朗读的文字', true);
-      return;
-    }
-    setSpeakBtn(msgKey, 'loading');
-    showToast('正在生成语音…');
     const sid = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     ttsStreamState = { sid, session, chunks: [], ended: false, ok: false, error: '', resolvers: [] };
     ttsLanReader = null;
     try {
       if (relayCfg) {
-        await apiCall('ttsStreamStart', { text: clean }, 20000);
+        await apiCall('ttsStreamStart', { text: streamText }, 20000);
       } else {
         const res = await fetch('/api/tts/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: clean })
+          body: JSON.stringify({ text: streamText })
         });
         if (!res.ok || !res.body) throw new Error('语音流服务返回 ' + res.status);
         consumeLanTtsStream(res, sid, session);
@@ -1834,20 +1829,20 @@
       // 流式不可用，退回分段合成
       ttsStreamState = null;
       if (session !== ttsSession) return;
-      playMessageSegments(convId, msgId, text, auto, temp);
+      playMessageSegments(convId, msgId, streamText, auto, temp);
       return;
     }
-    let idx = 0;
+    let idx = startIdx;
     while (true) {
       if (session !== ttsSession) break;
       const frame = await nextTtsFrame(sid, session);
       if (!frame) break;
       if (frame.end) {
-        if (!frame.ok && idx === 0) {
+        if (!frame.ok && idx === startIdx) {
           // 一段都没生成出来，退回分段合成
           if (session === ttsSession) {
             ttsStreamState = null;
-            playMessageSegments(convId, msgId, text, auto, temp);
+            playMessageSegments(convId, msgId, streamText, auto, temp);
           }
           return;
         }
@@ -1882,6 +1877,67 @@
       idx++;
     }
     if (session === ttsSession) finishTts(msgKey);
+  }
+
+  async function playStreamMessage(convId, msgId, text, auto, temp) {
+    if (!convId || !msgId || !text || !text.trim()) return;
+    const msgKey = ttsKey(convId, msgId);
+    const meta0 = getTtsMeta();
+    if (meta0[msgKey] && (meta0[msgKey].segs || 0) > 0) {
+      // 已有缓存的音频，直接播放缓存，不再重新合成
+      playMessageSegments(convId, msgId, text, auto, !!meta0[msgKey].temp);
+      return;
+    }
+    stopSpeaking();
+    const session = ++ttsSession;
+    ttsActiveKey = msgKey;
+    const clean = cleanTtsText(text);
+    if (!clean) {
+      finishTts(msgKey);
+      showToast('这条消息没有可朗读的文字', true);
+      return;
+    }
+    setSpeakBtn(msgKey, 'loading');
+    showToast('正在生成语音…');
+
+    // 1) 电脑端整段缓存（回复完成后已自动预生成 → 秒播）
+    const st = await tryTtsStatus(clean);
+    if (st && !st.partial) {
+      const blob = b64ToBlob(st.audioB64, st.mime || 'audio/wav');
+      if (session !== ttsSession || state.currentId !== convId) return;
+      await playTtsSegment(blob, session);
+      if (session === ttsSession) finishTts(msgKey);
+      return;
+    }
+
+    // 2) 手动点播：自动朗读关闭时只预生成首段，先播首段再把剩余文本送流式
+    if (!auto && st && st.partial && st.restText) {
+      const firstBlob = b64ToBlob(st.audioB64, st.mime || 'audio/wav');
+      try {
+        await ttsSaveBlob(ttsSegKey(msgKey, 0), firstBlob);
+        const meta = getTtsMeta();
+        meta[msgKey] = {
+          convId: String(convId),
+          msgId: String(msgId),
+          ts: Date.now(),
+          temp: !!temp,
+          segs: 1
+        };
+        setTtsMeta(meta);
+      } catch (_) {}
+      if (session !== ttsSession || state.currentId !== convId) return;
+      const played = await playTtsSegment(firstBlob, session);
+      if (!played || session !== ttsSession) return;
+      if (!st.restText) {
+        if (session === ttsSession) finishTts(msgKey);
+        return;
+      }
+      await runTtsStream(convId, msgId, st.restText, 1, auto, temp, session);
+      return;
+    }
+
+    // 3) 未命中缓存，整段走流式（边生成边播）
+    await runTtsStream(convId, msgId, clean, 0, auto, temp, session);
   }
 
   async function playMessageSegments(convId, msgId, text, auto, temp) {
