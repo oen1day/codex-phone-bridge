@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '9.3';
+  const APP_VERSION = '9.4';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -900,11 +900,13 @@
       for (const b of state.blocks.values()) b.classList.remove('typing');
       loadThreads();
       const tid = params.turn && params.turn.id;
+      // 先用当前已渲染的回复立即触发自动朗读（流式临时id会等刷新后再触发）
+      let triggered = maybeAutoSpeak();
       setTimeout(async () => {
         if (state.turnId && state.turnId !== tid) return;
         await refreshThreadNow();
-        maybeAutoSpeak();
-      }, 400);
+        if (!triggered) maybeAutoSpeak();
+      }, 0);
     } else if (method === 'turn/error') {
       stopTurnPolling();
       stopTurnWatchdog();
@@ -2163,22 +2165,28 @@
   }
 
   function maybeAutoSpeak() {
-    if (!state.currentId) return;
+    if (!state.currentId) return false;
+    if (!autoSpeak) {
+      console.log('[autoSpeak] 自动朗读开关已关闭，跳过自动播放');
+      return false;
+    }
     const agents = messagesEl.querySelectorAll('.msg.agent');
     const last = agents[agents.length - 1];
-    if (!last) return;
+    if (!last) return false;
     const msgId = last.dataset.msgId;
-    if (!msgId || msgId === turnStartLastMsgId) return;
+    if (!msgId || msgId === turnStartLastMsgId) return false;
+    if (String(msgId).indexOf('live-') === 0) return false; // 流式临时id，等刷新后的真实id再触发
     const text = collectAgentText(last);
-    if (!text.trim()) return;
+    if (!text.trim()) return false;
     const id = ttsKey(state.currentId, msgId);
     // 自愈：空闲状态下清掉残留的归属键，避免误拦新消息
     if (ttsActiveKey && ttsActiveState === 'idle') ttsActiveKey = null;
     // 只拦“同一消息确实正在生成/播放中”的重复触发
-    if (ttsActiveKey === id && ttsActiveState !== 'idle') return;
+    if (ttsActiveKey === id && ttsActiveState !== 'idle') return false;
     const meta = getTtsMeta();
-    if (meta[id] && !meta[id].temp) return;
+    if (meta[id] && !meta[id].temp) return false;
     speakMessage(state.currentId, msgId, text, true);
+    return true;
   }
 
   function currentLastMsgId() {
