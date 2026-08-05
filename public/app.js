@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '8.1';
+  const APP_VERSION = '8.2';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -1181,6 +1181,7 @@
 
   // ---------- send ----------
   async function send() {
+    stopSpeaking(); // 发送即停旧语音播放并取消旧合成
     const text = inputBox.value.trim();
     const images = state.pendingImages.slice();
     if (!text && !images.length) return;

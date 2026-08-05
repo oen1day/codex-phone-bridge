@@ -17,5 +17,6 @@
   "ttsUrl": "http://127.0.0.1:8866",
   "ttsEmotion": "平静日常",
   "ttsSegmentChars": 150,
-  "ttsTimeoutMs": 90000
+  "ttsTimeoutMs": 90000,
+  "ttsPythonPath": ""
 }

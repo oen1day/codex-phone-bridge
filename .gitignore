@@ -9,3 +9,6 @@ paths.json
 config.json
 make-release-zip.ps1
 .release-stage/
+
+__pycache__/
+*.pyc

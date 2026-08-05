@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '8.1';
+const VERSION = '8.2';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -346,7 +346,14 @@ function handleServerMessage(msg) {
     if (item.type === 'agentMessage' && item.id && item.text) {
       const tid = (params.turn && params.turn.id) || activeTurn.turnId;
       if (tid) {
-        preGenTexts.set(tid, ((preGenTexts.get(tid) || '') + '\n' + String(item.text)).trim());
+        const acc = ((preGenTexts.get(tid) || '') + '\n' + String(item.text)).trim();
+        preGenTexts.set(tid, acc);
+        // 提前预生成第一段：回复还在输出时首段音频就开始合成
+        const seg0 = splitTtsSegments(acc)[0];
+        if (seg0) {
+          const auto = turnAutoSpeak.get(tid) !== false;
+          queuePreGen(seg0, auto);
+        }
       }
     }
   } else if (msg.method === 'turn/started') {
@@ -738,21 +745,67 @@ async function ttsSynthesizeOne(seg) {
   }
 }
 
+function findTtsPython() {
+  if (config.ttsPythonPath && fs.existsSync(config.ttsPythonPath)) return config.ttsPythonPath;
+  const cands = [
+    path.join(ROOT, '..', 'work', 'index-tts', '.venv', 'Scripts', 'python.exe'),
+    'E:\\Codex\\work\\index-tts\\.venv\\Scripts\\python.exe'
+  ];
+  return cands.find(p => fs.existsSync(p)) || '';
+}
+
+const TTS_PYTHON = findTtsPython();
+const WAV2MP3 = path.join(ROOT, 'wav2mp3.py');
+
+function wavToMp3(wavBuf) {
+  return new Promise((resolve, reject) => {
+    if (!TTS_PYTHON || !fs.existsSync(WAV2MP3)) {
+      resolve(null);
+      return;
+    }
+    const p = spawn(TTS_PYTHON, [WAV2MP3], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const out = [];
+    p.stdout.on('data', d => out.push(d));
+    p.on('error', () => resolve(null));
+    p.on('close', (code) => {
+      if (code === 0 && out.length) resolve(Buffer.concat(out));
+      else resolve(null);
+    });
+    p.stdin.write(wavBuf);
+    p.stdin.end();
+  });
+}
+
 async function doTtsGenerate(clean) {
   fs.mkdirSync(TTS_DIR, { recursive: true });
   const key = ttsCacheKey(clean);
-  const file = path.join(TTS_DIR, key + '.wav');
-  if (fs.existsSync(file)) return fs.readFileSync(file);
-  const segs = splitTtsText(clean, config.ttsSegmentChars);
-  if (!segs.length) throw new Error('没有可朗读的文字');
-  const parts = [];
-  for (const seg of segs) {
-    parts.push(await ttsSynthesizeOne(seg));
+  const wavFile = path.join(TTS_DIR, key + '.wav');
+  const mp3File = path.join(TTS_DIR, key + '.mp3');
+  if (fs.existsSync(mp3File)) return { buf: fs.readFileSync(mp3File), mime: 'audio/mpeg' };
+  let wav;
+  if (fs.existsSync(wavFile)) {
+    wav = fs.readFileSync(wavFile);
+  } else {
+    const segs = splitTtsText(clean, config.ttsSegmentChars);
+    if (!segs.length) throw new Error('没有可朗读的文字');
+    const parts = [];
+    for (const seg of segs) {
+      parts.push(await ttsSynthesizeOne(seg));
+    }
+    wav = concatWavs(parts);
+    fs.writeFileSync(wavFile, wav);
+    pruneTtsCache();
   }
-  const wav = concatWavs(parts);
-  fs.writeFileSync(file, wav);
-  pruneTtsCache();
-  return wav;
+  if (TTS_PYTHON) {
+    try {
+      const mp3 = await wavToMp3(wav);
+      if (mp3 && mp3.length > 100) {
+        fs.writeFileSync(mp3File, mp3);
+        return { buf: mp3, mime: 'audio/mpeg' };
+      }
+    } catch (_) {}
+  }
+  return { buf: wav, mime: 'audio/wav' };
 }
 
 function ttsGenerate(text) {
@@ -773,12 +826,18 @@ function ttsGenerate(text) {
 function pruneTtsCache() {
   try {
     fs.mkdirSync(TTS_DIR, { recursive: true });
-    const files = fs.readdirSync(TTS_DIR)
-      .filter(f => f.endsWith('.wav'))
-      .map(f => ({ f, t: fs.statSync(path.join(TTS_DIR, f)).mtimeMs }))
-      .sort((a, b) => b.t - a.t);
-    for (const it of files.slice(200)) {
-      try { fs.unlinkSync(path.join(TTS_DIR, it.f)); } catch (_) {}
+    const keys = new Map();
+    for (const f of fs.readdirSync(TTS_DIR)) {
+      if (!/\.(wav|mp3)$/i.test(f)) continue;
+      const base = f.replace(/\.(wav|mp3)$/i, '');
+      const t = fs.statSync(path.join(TTS_DIR, f)).mtimeMs;
+      if (!keys.has(base) || keys.get(base) < t) keys.set(base, t);
+    }
+    const sorted = [...keys.entries()].sort((a, b) => b[1] - a[1]);
+    for (const it of sorted.slice(200)) {
+      for (const ext of ['.wav', '.mp3']) {
+        try { fs.unlinkSync(path.join(TTS_DIR, it[0] + ext)); } catch (_) {}
+      }
     }
   } catch (_) {}
 }
@@ -813,7 +872,8 @@ let ttsRealTimeBusy = false;
 
 function ttsCacheReady(clean) {
   if (!clean) return false;
-  return fs.existsSync(path.join(TTS_DIR, ttsCacheKey(clean) + '.wav'));
+  const key = ttsCacheKey(clean);
+  return fs.existsSync(path.join(TTS_DIR, key + '.wav')) || fs.existsSync(path.join(TTS_DIR, key + '.mp3'));
 }
 
 // 计算第一段之后剩余的文本（容忍首段拼接时去掉的空格/换行）
@@ -838,19 +898,27 @@ function restAfterFirst(clean, first) {
 function ttsStatusFor(text) {
   const clean = cleanTtsText(text || '');
   if (!clean) return { ready: false };
-  const fullFile = path.join(TTS_DIR, ttsCacheKey(clean) + '.wav');
-  if (fs.existsSync(fullFile)) {
-    return { ready: true, partial: false, mime: 'audio/wav', audioB64: fs.readFileSync(fullFile).toString('base64') };
+  const fullKey = ttsCacheKey(clean);
+  const fullMp3 = path.join(TTS_DIR, fullKey + '.mp3');
+  const fullWav = path.join(TTS_DIR, fullKey + '.wav');
+  if (fs.existsSync(fullMp3)) {
+    return { ready: true, partial: false, mime: 'audio/mpeg', audioB64: fs.readFileSync(fullMp3).toString('base64') };
+  }
+  if (fs.existsSync(fullWav)) {
+    return { ready: true, partial: false, mime: 'audio/wav', audioB64: fs.readFileSync(fullWav).toString('base64') };
   }
   // 自动朗读关闭时可能只预生成了第一段
   const segs = splitTtsSegments(clean);
   if (segs.length > 1) {
-    const firstFile = path.join(TTS_DIR, ttsCacheKey(segs[0]) + '.wav');
-    if (fs.existsSync(firstFile)) {
+    const firstKey = ttsCacheKey(segs[0]);
+    const firstMp3 = path.join(TTS_DIR, firstKey + '.mp3');
+    const firstWav = path.join(TTS_DIR, firstKey + '.wav');
+    const firstFile = fs.existsSync(firstMp3) ? firstMp3 : (fs.existsSync(firstWav) ? firstWav : '');
+    if (firstFile) {
       return {
         ready: true,
         partial: true,
-        mime: 'audio/wav',
+        mime: firstFile.endsWith('.mp3') ? 'audio/mpeg' : 'audio/wav',
         audioB64: fs.readFileSync(firstFile).toString('base64'),
         restText: restAfterFirst(clean, segs[0])
       };
@@ -892,6 +960,13 @@ function processPreGenQueue() {
         const wav = concatWavs(frames);
         fs.mkdirSync(TTS_DIR, { recursive: true });
         fs.writeFileSync(path.join(TTS_DIR, job.key + '.wav'), wav);
+        if (TTS_PYTHON) {
+          wavToMp3(wav).then(mp3 => {
+            if (mp3 && mp3.length > 100) {
+              fs.writeFileSync(path.join(TTS_DIR, job.key + '.mp3'), mp3);
+            }
+          }).catch(() => {});
+        }
         pruneTtsCache();
         console.log('[tts] 预生成完成: ' + job.key.slice(0, 8) + '（' + frames.length + ' 段）');
       }
@@ -1055,6 +1130,7 @@ async function apiDispatch(method, params, clientId) {
         return r;
       }
     case 'turnStart': {
+      cancelPreGen(); // 新消息一到就取消旧语音预生成，清空队列
       const body = params || {};
       const threadId = params.threadId;
       const owner = ownerOfThread(threadId);
@@ -1128,8 +1204,8 @@ async function apiDispatch(method, params, clientId) {
       cancelPreGen();
       ttsRealTimeBusy = true;
       try {
-        const buf = await ttsGenerate(params.text);
-        return { ok: true, mime: 'audio/wav', audioB64: buf.toString('base64') };
+        const r = await ttsGenerate(params.text);
+        return { ok: true, mime: r.mime, audioB64: r.buf.toString('base64') };
       } finally {
         ttsRealTimeBusy = false;
         processPreGenQueue();
@@ -1428,8 +1504,8 @@ async function handleApi(req, res, url) {
     }
     if (p === '/api/tts' && req.method === 'POST') {
       const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
-      const buf = await ttsGenerate(body.text);
-      sendJson(res, 200, { ok: true, mime: 'audio/wav', audioB64: buf.toString('base64') });
+      const r = await ttsGenerate(body.text);
+      sendJson(res, 200, { ok: true, mime: r.mime, audioB64: r.buf.toString('base64') });
       return;
     }
     if (p === '/api/tts/stream' && req.method === 'POST') {

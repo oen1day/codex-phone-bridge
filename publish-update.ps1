@@ -80,7 +80,8 @@ function New-ReleaseZip {
   $items = @(
     'server.js', 'start.bat', 'start.ps1', 'build-apk.ps1',
     'README.md', 'version.json', 'publish-update.ps1', 'public', 'android',
-    'CodexPhoneBridge.apk', 'phone-mcp.js', 'phone-tool.ps1', 'config.example.json'
+    'CodexPhoneBridge.apk', 'phone-mcp.js', 'phone-tool.ps1', 'config.example.json',
+    'wav2mp3.py'
   )
   foreach ($i in $items) {
     Copy-Item -LiteralPath (Join-Path $root $i) -Destination $tmp -Recurse -Force
