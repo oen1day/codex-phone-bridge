@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '9.1';
+const VERSION = '9.2';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -1066,7 +1066,9 @@ async function readThreadTurns(threadId) {
 
 // 把线程按“最近 limit 条消息”分页：按整轮返回，保证气泡完整
 function pageThread(thread, limit, before) {
-  const turns = (thread && thread.turns) || [];
+  // 兼容两种返回形状：{thread:{turns}} 或直接线程对象
+  const raw = (thread && thread.thread && Array.isArray(thread.thread.turns)) ? thread.thread : (thread || {});
+  const turns = raw.turns || [];
   const LIMIT = Math.min(50, Math.max(1, Number(limit) || 10));
   let total = 0;
   for (const t of turns) {
@@ -1086,8 +1088,8 @@ function pageThread(thread, limit, before) {
   }
   return {
     thread: {
-      name: (thread && (thread.name || thread.title || thread.preview)) || '',
-      status: (thread && thread.status) || null
+      name: (raw.name || raw.title || raw.preview) || '',
+      status: raw.status || null
     },
     turns: turns.filter(t => inRange.has(t.id || t.turnId)),
     hasMore: startMsg > 0,
