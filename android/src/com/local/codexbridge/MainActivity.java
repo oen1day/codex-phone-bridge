@@ -18,6 +18,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -30,12 +31,16 @@ import android.webkit.WebViewClient;
 import android.webkit.ValueCallback;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import org.json.JSONObject;
 import org.json.JSONArray;
 
@@ -50,9 +55,10 @@ public class MainActivity extends Activity {
     private static final String KEY_PASSWORD = "relay_password";
     private static final String KEY_UPDATE_URL = "update_url";
     private static final String KEY_EFFORT = "effort";
+    private static final String KEY_AUTO_SPEAK = "auto_speak";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "6.6";
+    private static final String APP_VERSION = "7.0";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -102,6 +108,7 @@ public class MainActivity extends Activity {
                 o.put("roomCode", p.getString(KEY_ROOM, ""));
                 o.put("password", p.getString(KEY_PASSWORD, ""));
                 o.put("effort", p.getString(KEY_EFFORT, "medium"));
+                o.put("autoSpeak", p.getBoolean(KEY_AUTO_SPEAK, true));
                 o.put("broker", p.getString(KEY_BROKER, RELAY_BROKER));
                 return o.toString();
             } catch (Exception e) {
@@ -113,6 +120,77 @@ public class MainActivity extends Activity {
         public String getEffort() {
             SharedPreferences p = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             return p.getString(KEY_EFFORT, "medium");
+        }
+
+        @JavascriptInterface
+        public boolean getAutoSpeak() {
+            SharedPreferences p = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            return p.getBoolean(KEY_AUTO_SPEAK, true);
+        }
+
+        private String ttsDir() {
+            File d = new File(getFilesDir(), "tts");
+            if (!d.exists()) d.mkdirs();
+            return d.getAbsolutePath();
+        }
+
+        private String safeTtsId(String id) {
+            return (id == null ? "" : id).replaceAll("[^A-Za-z0-9_-]", "_");
+        }
+
+        @JavascriptInterface
+        public String saveTtsAudio(String id, String b64) {
+            try {
+                byte[] bytes = Base64.decode(b64 == null ? "" : b64, Base64.DEFAULT);
+                File f = new File(ttsDir(), safeTtsId(id) + ".wav");
+                FileOutputStream out = new FileOutputStream(f);
+                out.write(bytes);
+                out.close();
+                return "ok";
+            } catch (Exception e) {
+                return "error: " + e.getMessage();
+            }
+        }
+
+        @JavascriptInterface
+        public String loadTtsAudio(String id) {
+            try {
+                File f = new File(ttsDir(), safeTtsId(id) + ".wav");
+                if (!f.exists()) return "";
+                byte[] bytes = new byte[(int) f.length()];
+                FileInputStream in = new FileInputStream(f);
+                int off = 0;
+                while (off < bytes.length) {
+                    int n = in.read(bytes, off, bytes.length - off);
+                    if (n < 0) break;
+                    off += n;
+                }
+                in.close();
+                return Base64.encodeToString(bytes, Base64.NO_WRAP);
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public void deleteTtsAudio(String id) {
+            try {
+                File f = new File(ttsDir(), safeTtsId(id) + ".wav");
+                if (f.exists()) f.delete();
+            } catch (Exception ignored) {}
+        }
+
+        @JavascriptInterface
+        public void deleteTtsByPrefix(String prefix) {
+            try {
+                File d = new File(ttsDir());
+                File[] fs = d.listFiles();
+                if (fs == null) return;
+                String p = safeTtsId(prefix) + "_";
+                for (File f : fs) {
+                    if (f.isFile() && f.getName().startsWith(p)) f.delete();
+                }
+            } catch (Exception ignored) {}
         }
 
         @JavascriptInterface
@@ -354,6 +432,18 @@ public class MainActivity extends Activity {
         effortSpinner.setSelection(effortSel);
         root.addView(effortSpinner, lp());
 
+        final TextView autoSpeakLabel = new TextView(this);
+        autoSpeakLabel.setText("自动朗读 AI 回复（每条回复仍会生成语音）");
+        autoSpeakLabel.setTextColor(Color.parseColor("#9aa3b2"));
+        root.addView(autoSpeakLabel, lp());
+
+        final CheckBox autoSpeakBox = new CheckBox(this);
+        autoSpeakBox.setText("开启自动朗读");
+        autoSpeakBox.setTextColor(Color.WHITE);
+        boolean curAutoSpeak = initial == null || initial.length <= 7 || !"false".equalsIgnoreCase(initial[7]);
+        autoSpeakBox.setChecked(curAutoSpeak);
+        root.addView(autoSpeakBox, lp());
+
         final EditText brokerInput = new EditText(this);
         brokerInput.setHint("中继服务器地址（一般不用改）");
         if (initial != null && initial.length > 6 && !initial[6].isEmpty()) brokerInput.setText(initial[6]);
@@ -417,6 +507,7 @@ public class MainActivity extends Activity {
                 e.putString(KEY_PASSWORD, pw);
                 e.putString(KEY_UPDATE_URL, updateInput.getText().toString().trim());
                 e.putString(KEY_EFFORT, effortValues[effortSpinner.getSelectedItemPosition()]);
+                e.putBoolean(KEY_AUTO_SPEAK, autoSpeakBox.isChecked());
                 String brokerVal = brokerInput.getText().toString().trim();
                 e.putString(KEY_BROKER, brokerVal.isEmpty() ? RELAY_BROKER : brokerVal);
                 e.apply();
@@ -577,6 +668,7 @@ public class MainActivity extends Activity {
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
         if ("relay".equals(mode)) {
             web.addJavascriptInterface(new JsBridge(), "AndroidBridge");
         }
@@ -627,7 +719,8 @@ public class MainActivity extends Activity {
                 prefs.getString(KEY_PASSWORD, ""),
                 prefs.getString(KEY_UPDATE_URL, ""),
                 prefs.getString(KEY_EFFORT, "medium"),
-                prefs.getString(KEY_BROKER, RELAY_BROKER)
+                prefs.getString(KEY_BROKER, RELAY_BROKER),
+                String.valueOf(prefs.getBoolean(KEY_AUTO_SPEAK, true))
         };
         final AlertDialog dlg = new AlertDialog.Builder(this)
                 .setTitle("连接设置")

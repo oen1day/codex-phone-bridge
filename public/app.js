@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '6.6';
+  const APP_VERSION = '7.0';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -30,6 +30,7 @@
     try { currentEffort = window.AndroidBridge.getEffort() || 'medium'; } catch (_) {}
   }
   if (!EFFORT_LABELS[currentEffort]) currentEffort = 'medium';
+  autoSpeak = readAutoSpeakPref();
 
   function getPersistentDeviceId() {
     if (window.AndroidBridge && window.AndroidBridge.getDeviceId) {
@@ -75,11 +76,19 @@
   let lastTurnActivityAt = 0;
   let liveReplyId = null;
   let liveSeq = 0;
+  let turnStartLastMsgId = null;
   let quotedMsg = null;
+  let autoSpeak = true;
+  const speakButtons = new Map();
+  const ttsMem = new Map();
+  const ttsGenerating = new Map();
+  let playingTtsKey = null;
+  let ttsAudioEl = null;
+  let ttsBlobUrl = null;
   const replySeen = {};
 
   // ---------- 通信层（局域网 / 中继） ----------
-  async function lanCall(method, params) {
+  async function lanCall(method, params, timeoutMs) {
     let url, init;
     const json = () => ({ 'Content-Type': 'application/json' });
     switch (method) {
@@ -110,6 +119,10 @@
         url = '/api/approve';
         init = { method: 'POST', headers: json(), body: JSON.stringify({ requestId: params.requestId, decision: params.decision }) };
         break;
+      case 'ttsGenerate':
+        url = '/api/tts';
+        init = { method: 'POST', headers: json(), body: JSON.stringify({ text: (params && params.text) || '' }) };
+        break;
       default:
         throw new Error('未知方法: ' + method);
     }
@@ -119,7 +132,7 @@
     return data;
   }
 
-  function relayCall(method, params) {
+  function relayCall(method, params, timeoutMs) {
     if (!relayChannel || !relayChannel.ready) return Promise.reject(new Error('中继未连接'));
     const id = ++relayRpcId;
     return new Promise((resolve, reject) => {
@@ -133,7 +146,7 @@
           relayPending.delete(id);
           reject(new Error('请求超时: ' + method));
         }
-      }, 120000);
+      }, timeoutMs || 120000);
     });
   }
 
@@ -144,8 +157,8 @@
     relayPending.clear();
   }
 
-  function apiCall(method, params) {
-    return relayCfg ? relayCall(method, params) : lanCall(method, params);
+  function apiCall(method, params, timeoutMs) {
+    return relayCfg ? relayCall(method, params, timeoutMs) : lanCall(method, params, timeoutMs);
   }
 
   function onRelayMessage(msg) {
@@ -551,10 +564,15 @@
   async function openThread(id) {
     stopTurnPolling();
     stopTurnWatchdog();
+    if (id !== state.currentId) {
+      stopSpeaking();
+      deleteAllTemps();
+    }
     liveReplyId = null;
     clearQuote();
     state.currentId = id;
     state.blocks.clear();
+    speakButtons.clear();
     state.approvals.clear();
     approvalArea.innerHTML = '';
     messagesEl.innerHTML = '';
@@ -584,9 +602,11 @@
   }
 
   function renderHistory(turns) {
+    const aiIds = [];
     for (const turn of turns) {
       for (const item of (turn.items || [])) {
         renderHistoryItem(item);
+        if (item.type === 'agentMessage' && (item.text || '').trim()) aiIds.push(item.id);
       }
       if (turn.status === 'inProgress') {
         state.turnId = turn.id;
@@ -595,6 +615,7 @@
       }
     }
     updateThinkingIndicator(state.running);
+    pruneConvAudio(state.currentId, aiIds);
   }
 
   function renderHistoryItem(item) {
@@ -649,11 +670,18 @@
     el.className = 'msg agent';
     el.innerHTML = '<div class="bubble"></div>' +
       '<div class="msg-actions">' +
+      '<button class="msg-act speak-btn">🔊 朗读</button>' +
       '<button class="msg-act">复制</button><button class="msg-act">引用</button>' +
       '</div>';
-    const btns = el.querySelectorAll('.msg-act');
-    btns[0].addEventListener('click', () => copyText(el.querySelector('.bubble').innerText.trim()));
-    btns[1].addEventListener('click', () => setQuote('AI', el.querySelector('.bubble').innerText.trim()));
+    const spk = el.querySelector('.speak-btn');
+    if (spk && !spk._bound) {
+      spk._bound = true;
+      spk.addEventListener('click', () => onSpeakClick(el));
+    }
+    const copyBtn = el.querySelectorAll('.msg-act')[1];
+    const quoteBtn = el.querySelectorAll('.msg-act')[2];
+    copyBtn.addEventListener('click', () => copyText(el.querySelector('.bubble').innerText.trim()));
+    quoteBtn.addEventListener('click', () => setQuote('AI', el.querySelector('.bubble').innerText.trim()));
     messagesEl.appendChild(el);
     return el;
   }
@@ -685,6 +713,10 @@
       block.dataset.id = data.id;
       bubble.appendChild(block);
       state.blocks.set(data.id, block);
+    }
+    if (data.kind === 'text' && data.id) {
+      agentEl.dataset.msgId = data.id;
+      updateSpeakBtnKey(agentEl, data.id);
     }
     renderBlock(block, data);
     scrollBottom();
@@ -743,6 +775,8 @@
     if (method === 'turn/started') {
       state.turnId = params.turn && params.turn.id;
       state.running = true;
+      turnStartLastMsgId = currentLastMsgId();
+      deleteTempsForConv(state.currentId);
       replySeen[state.turnId] = false;
       setStatus('正在运行…');
       $('interruptBtn').classList.remove('hidden');
@@ -763,9 +797,10 @@
       for (const b of state.blocks.values()) b.classList.remove('typing');
       loadThreads();
       const tid = params.turn && params.turn.id;
-      setTimeout(() => {
+      setTimeout(async () => {
         if (state.turnId && state.turnId !== tid) return;
-        refreshThreadNow();
+        await refreshThreadNow();
+        maybeAutoSpeak();
       }, 400);
     } else if (method === 'turn/error') {
       stopTurnPolling();
@@ -869,6 +904,7 @@
       const data = await apiCall('threadRead', { threadId: state.currentId });
       const thread = data.thread || data;
       state.blocks.clear();
+      speakButtons.clear();
       state.approvals.clear();
       approvalArea.innerHTML = '';
       messagesEl.innerHTML = '';
@@ -896,6 +932,7 @@
 
   function refreshThreadFromData(thread) {
     state.blocks.clear();
+    speakButtons.clear();
     state.approvals.clear();
     approvalArea.innerHTML = '';
     messagesEl.innerHTML = '';
@@ -1124,6 +1161,7 @@
         lastTurnActivityAt = Date.now();
         liveReplyId = null;
         updateThinkingIndicator(true);
+        deleteTempsForConv(state.currentId);
         startTurnPolling();
         startTurnWatchdog();
       }
@@ -1285,6 +1323,329 @@
   function clearQuote() {
     quotedMsg = null;
     $('quoteBar').classList.add('hidden');
+  }
+
+  // ---------- AI 消息朗读 ----------
+  function readAutoSpeakPref() {
+    try {
+      if (relayCfg && typeof relayCfg.autoSpeak !== 'undefined') return !!relayCfg.autoSpeak;
+    } catch (_) {}
+    try {
+      if (window.AndroidBridge && window.AndroidBridge.getAutoSpeak) {
+        return String(window.AndroidBridge.getAutoSpeak()) !== '0';
+      }
+    } catch (_) {}
+    return true;
+  }
+
+  function ttsKey(convId, msgId) { return String(convId) + '_' + String(msgId); }
+  function sanitizeTtsId(s) { return String(s || '').replace(/[^A-Za-z0-9_-]/g, '_'); }
+
+  function b64ToBlob(b64, mime) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime || 'audio/wav' });
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1] || '');
+      r.onerror = () => reject(new Error('读取音频失败'));
+      r.readAsDataURL(blob);
+    });
+  }
+
+  function getTtsMeta() {
+    try { return JSON.parse(localStorage.getItem('ttsMeta') || '{}'); } catch (_) { return {}; }
+  }
+
+  function setTtsMeta(m) {
+    try { localStorage.setItem('ttsMeta', JSON.stringify(m)); } catch (_) {}
+  }
+
+  async function ttsSaveBlob(id, blob) {
+    if (window.AndroidBridge && window.AndroidBridge.saveTtsAudio) {
+      const b64 = await blobToBase64(blob);
+      const r = window.AndroidBridge.saveTtsAudio(sanitizeTtsId(id), b64);
+      if (r && r !== 'ok') throw new Error(r);
+      return;
+    }
+    ttsMem.set(id, blob);
+  }
+
+  async function ttsLoadBlob(id) {
+    if (ttsMem.has(id)) return ttsMem.get(id);
+    if (window.AndroidBridge && window.AndroidBridge.loadTtsAudio) {
+      const b64 = window.AndroidBridge.loadTtsAudio(sanitizeTtsId(id));
+      if (b64) {
+        const blob = b64ToBlob(b64, 'audio/wav');
+        ttsMem.set(id, blob);
+        return blob;
+      }
+    }
+    return null;
+  }
+
+  async function ttsDelete(id) {
+    ttsMem.delete(id);
+    if (window.AndroidBridge && window.AndroidBridge.deleteTtsAudio) {
+      try { window.AndroidBridge.deleteTtsAudio(sanitizeTtsId(id)); } catch (_) {}
+    }
+  }
+
+  async function ttsDeleteByConv(convId) {
+    const prefix = sanitizeTtsId(convId) + '_';
+    for (const k of [...ttsMem.keys()]) if (k.startsWith(prefix)) ttsMem.delete(k);
+    if (window.AndroidBridge && window.AndroidBridge.deleteTtsByPrefix) {
+      try { window.AndroidBridge.deleteTtsByPrefix(sanitizeTtsId(convId)); } catch (_) {}
+    }
+  }
+
+  function deleteTempsForConv(convId) {
+    const meta = getTtsMeta();
+    const remove = [];
+    for (const id of Object.keys(meta)) {
+      if (meta[id].temp && String(meta[id].convId) === String(convId)) remove.push(id);
+    }
+    for (const id of remove) {
+      delete meta[id];
+      ttsDelete(id);
+    }
+    setTtsMeta(meta);
+  }
+
+  function deleteAllTemps() {
+    const meta = getTtsMeta();
+    const remove = [];
+    for (const id of Object.keys(meta)) if (meta[id].temp) remove.push(id);
+    for (const id of remove) {
+      delete meta[id];
+      ttsDelete(id);
+    }
+    setTtsMeta(meta);
+  }
+
+  async function pruneConvAudio(convId, validMsgIds) {
+    if (!convId) return;
+    const set = new Set(validMsgIds.map(m => String(m)));
+    const meta = getTtsMeta();
+    const remove = [];
+    for (const id of Object.keys(meta)) {
+      const r = meta[id];
+      if (!r.temp && String(r.convId) === String(convId) && !set.has(String(r.msgId))) remove.push(id);
+    }
+    for (const id of remove) {
+      delete meta[id];
+      await ttsDelete(id);
+    }
+    setTtsMeta(meta);
+  }
+
+  async function cleanupTts() {
+    const meta = getTtsMeta();
+    const byConv = {};
+    for (const id of Object.keys(meta)) {
+      const r = meta[id];
+      (byConv[r.convId] = byConv[r.convId] || []).push({ id: id, rec: r });
+    }
+    const convs = Object.keys(byConv).map(c => ({
+      convId: c,
+      recs: byConv[c],
+      lastTs: Math.max.apply(null, byConv[c].map(x => x.rec.ts))
+    })).sort((a, b) => b.lastTs - a.lastTs);
+    const remove = [];
+    convs.forEach((g, ci) => {
+      if (ci >= 5) {
+        for (const x of g.recs) remove.push(x.id);
+        return;
+      }
+      const keep = g.recs.filter(x => !x.rec.temp).sort((a, b) => b.rec.ts - a.rec.ts).slice(0, 10);
+      const keepIds = new Set(keep.map(x => x.id));
+      for (const x of g.recs) if (!x.rec.temp && !keepIds.has(x.id)) remove.push(x.id);
+    });
+    for (const id of remove) {
+      delete meta[id];
+      await ttsDelete(id);
+    }
+    setTtsMeta(meta);
+  }
+
+  async function ensureTtsAudio(convId, msgId, text, temp) {
+    const id = ttsKey(convId, msgId);
+    if (ttsGenerating.has(id)) return ttsGenerating.get(id);
+    const p = (async () => {
+      const cached = await ttsLoadBlob(id);
+      if (cached) return cached;
+      showToast('正在生成语音…');
+      const res = await apiCall('ttsGenerate', { text: text || '' }, 600000);
+      if (!res || !res.audioB64) throw new Error('语音生成失败');
+      const blob = b64ToBlob(res.audioB64, res.mime || 'audio/wav');
+      await ttsSaveBlob(id, blob);
+      const meta = getTtsMeta();
+      meta[id] = { convId: String(convId), msgId: String(msgId), ts: Date.now(), temp: !!temp };
+      setTtsMeta(meta);
+      cleanupTts();
+      return blob;
+    })();
+    ttsGenerating.set(id, p);
+    p.catch(() => {}).then(() => ttsGenerating.delete(id));
+    return p;
+  }
+
+  function setSpeakBtn(key, state) {
+    const btn = speakButtons.get(key);
+    if (!btn) return;
+    btn.classList.remove('speaking', 'disabled');
+    btn.disabled = false;
+    if (state === 'playing') {
+      btn.textContent = '⏹ 停止';
+      btn.classList.add('speaking');
+    } else if (state === 'loading') {
+      btn.textContent = '⏳ 生成中…';
+      btn.classList.add('disabled');
+      btn.disabled = true;
+    } else {
+      btn.textContent = '🔊 朗读';
+    }
+  }
+
+  function updateSpeakBtnKey(agentEl, msgId) {
+    const btn = agentEl.querySelector('.speak-btn');
+    if (!btn) return;
+    const oldKey = btn._speakKey;
+    if (oldKey && speakButtons.get(oldKey) === btn) speakButtons.delete(oldKey);
+    const key = ttsKey(state.currentId || '', msgId || '');
+    btn._speakKey = key;
+    speakButtons.set(key, btn);
+  }
+
+  function collectAgentText(agentEl) {
+    const parts = [];
+    const blocks = agentEl.querySelectorAll('.block.agent-text');
+    for (const b of blocks) {
+      const t = (b.textContent || '').trim();
+      if (t) parts.push(t);
+    }
+    return parts.join('\n');
+  }
+
+  function stopSpeaking() {
+    if (ttsAudioEl) {
+      try { ttsAudioEl.pause(); ttsAudioEl.onended = null; ttsAudioEl.onerror = null; } catch (_) {}
+    }
+    if (ttsBlobUrl) {
+      try { URL.revokeObjectURL(ttsBlobUrl); } catch (_) {}
+      ttsBlobUrl = null;
+    }
+    const k = playingTtsKey;
+    playingTtsKey = null;
+    if (k) setSpeakBtn(k, 'idle');
+  }
+
+  function playTtsBlob(id, blob) {
+    stopSpeaking();
+    try {
+      const url = URL.createObjectURL(blob);
+      if (!ttsAudioEl) ttsAudioEl = new Audio();
+      ttsAudioEl.src = url;
+      ttsBlobUrl = url;
+      playingTtsKey = id;
+      setSpeakBtn(id, 'playing');
+      ttsAudioEl.onended = () => {
+        if (playingTtsKey === id) {
+          playingTtsKey = null;
+          setSpeakBtn(id, 'idle');
+        }
+      };
+      ttsAudioEl.onerror = () => {
+        if (playingTtsKey === id) {
+          playingTtsKey = null;
+          setSpeakBtn(id, 'idle');
+        }
+        showToast('音频播放失败', true);
+      };
+      const pr = ttsAudioEl.play();
+      if (pr && pr.catch) pr.catch(() => {
+        if (playingTtsKey === id) {
+          playingTtsKey = null;
+          setSpeakBtn(id, 'idle');
+        }
+        showToast('自动播放被系统拦截，请再点一次「朗读」', true);
+      });
+    } catch (e) {
+      playingTtsKey = null;
+      setSpeakBtn(id, 'idle');
+      showToast('播放失败: ' + e.message, true);
+    }
+  }
+
+  async function onSpeakClick(agentEl) {
+    const convId = state.currentId;
+    if (!convId) { showToast('请先打开一个对话', true); return; }
+    const msgId = agentEl.dataset.msgId || ('msg' + Date.now());
+    const text = collectAgentText(agentEl);
+    if (!text.trim()) { showToast('这条消息没有可朗读的文字', true); return; }
+    const id = ttsKey(convId, msgId);
+    if (playingTtsKey === id) { stopSpeaking(); return; }
+    stopSpeaking();
+    try {
+      const meta = getTtsMeta();
+      const rec = meta[id];
+      const temp = !rec || rec.temp;
+      const cached = await ttsLoadBlob(id);
+      if (cached) { playTtsBlob(id, cached); return; }
+      setSpeakBtn(id, 'loading');
+      const blob = await ensureTtsAudio(convId, msgId, text, temp);
+      playTtsBlob(id, blob);
+    } catch (e) {
+      setSpeakBtn(id, 'idle');
+      showToast('朗读失败: ' + ((e && e.message) || e), true);
+    }
+  }
+
+  async function speakMessage(convId, msgId, text, auto) {
+    if (!convId || !msgId || !text || !text.trim()) return;
+    const id = ttsKey(convId, msgId);
+    if (ttsGenerating.has(id)) return;
+    try {
+      setSpeakBtn(id, 'loading');
+      const blob = await ensureTtsAudio(convId, msgId, text, false);
+      if (state.currentId !== convId) {
+        setSpeakBtn(id, 'idle');
+        return;
+      }
+      if (auto && !autoSpeak) {
+        setSpeakBtn(id, 'idle');
+        return;
+      }
+      playTtsBlob(id, blob);
+    } catch (e) {
+      setSpeakBtn(id, 'idle');
+      showToast('朗读生成失败: ' + ((e && e.message) || e), true);
+    }
+  }
+
+  function maybeAutoSpeak() {
+    if (!state.currentId) return;
+    const agents = messagesEl.querySelectorAll('.msg.agent');
+    const last = agents[agents.length - 1];
+    if (!last) return;
+    const msgId = last.dataset.msgId;
+    if (!msgId || msgId === turnStartLastMsgId) return;
+    const text = collectAgentText(last);
+    if (!text.trim()) return;
+    const id = ttsKey(state.currentId, msgId);
+    const meta = getTtsMeta();
+    if (meta[id] && !meta[id].temp) return;
+    speakMessage(state.currentId, msgId, text, true);
+  }
+
+  function currentLastMsgId() {
+    const agents = messagesEl.querySelectorAll('.msg.agent');
+    const last = agents[agents.length - 1];
+    return last ? (last.dataset.msgId || null) : null;
   }
 
   function traceEvent(name) {

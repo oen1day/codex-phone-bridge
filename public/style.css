@@ -262,6 +262,8 @@ body { background: #0b0e14; }
   border-radius: 8px; border: 1px solid #263043; background: #1a2130;
   color: #9fb0c7; cursor: pointer;
 }
+.msg-act.speaking { background: #10a37f; color: #fff; border-color: #10a37f; }
+.msg-act.disabled { opacity: .6; }
 .msg-act:active { background: #232c3d; }
 .quote-bar {
   display: flex; align-items: center; gap: 8px; padding: 6px 12px;

@@ -13,6 +13,7 @@ const CONFIG_PATH = path.join(ROOT, 'config.json');
 const PATHS_PATH = path.join(ROOT, 'paths.json');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const UPLOAD_DIR = path.join(ROOT, 'uploads');
+const TTS_DIR = path.join(UPLOAD_DIR, 'tts');
 const PHONE_THREADS_PATH = path.join(ROOT, 'phone-threads.json');
 
 let phoneThreads = {};
@@ -73,7 +74,11 @@ function loadConfig() {
     relayEnabled: true,
     relayBroker: 'wss://broker.emqx.io:8084/mqtt',
     relayRoomCode: '',
-    shareKey: ''
+    shareKey: '',
+    ttsUrl: 'http://127.0.0.1:8866',
+    ttsEmotion: '平静日常',
+    ttsSegmentChars: 150,
+    ttsTimeoutMs: 90000
   }, cfg);
   if (!merged.workspace) merged.workspace = docs;
   if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
@@ -82,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '6.6';
+const VERSION = '7.0';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -558,6 +563,143 @@ async function checkUpdate() {
   } catch (_) {}
 }
 
+// ---------- 离线语音朗读（IndexTTS-2 本机服务） ----------
+let ttsChain = Promise.resolve();
+const ttsInflight = new Map();
+
+function ttsCacheKey(text) {
+  return crypto.createHash('sha256').update((config.ttsEmotion || '平静日常') + '|' + String(text || '')).digest('hex');
+}
+
+function wavDataOffset(buf) {
+  if (buf.length < 12 || buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') return -1;
+  let off = 12;
+  while (off + 8 <= buf.length) {
+    const id = buf.toString('ascii', off, off + 4);
+    const size = buf.readUInt32LE(off + 4);
+    if (id === 'data') return off + 8;
+    off += 8 + size + (size % 2);
+  }
+  return -1;
+}
+
+function concatWavs(parts) {
+  if (parts.length <= 1) return parts[0];
+  const offsets = parts.map(wavDataOffset);
+  if (offsets.some(o => o < 0)) return Buffer.concat(parts);
+  const head = parts[0].subarray(0, offsets[0]);
+  let pcmLen = 0;
+  for (let i = 0; i < parts.length; i++) pcmLen += parts[i].length - offsets[i];
+  const out = Buffer.alloc(head.length + pcmLen);
+  head.copy(out, 0);
+  let off = head.length;
+  for (let i = 0; i < parts.length; i++) {
+    parts[i].copy(out, off, offsets[i]);
+    off += parts[i].length - offsets[i];
+  }
+  out.writeUInt32LE(pcmLen, offsets[0] - 4);
+  out.writeUInt32LE(out.length - 8, 4);
+  return out;
+}
+
+function splitTtsText(text, maxChars) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  const limit = Math.max(20, Number(maxChars) || 150);
+  const segs = [];
+  let cur = '';
+  for (const ch of clean) {
+    cur += ch;
+    if (cur.length >= limit) {
+      segs.push(cur);
+      cur = '';
+    }
+  }
+  if (cur) segs.push(cur);
+  return segs;
+}
+
+async function ttsSynthesizeOne(seg) {
+  const base = String(config.ttsUrl || 'http://127.0.0.1:8866').replace(/\/+$/, '');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Number(config.ttsTimeoutMs) || 90000);
+  try {
+    const r = await fetch(base + '/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: seg,
+        emotion: config.ttsEmotion || '平静日常',
+        emo_alpha: 1.0,
+        use_random: false
+      }),
+      signal: ctrl.signal
+    });
+    if (!r.ok) throw new Error('语音服务返回 ' + r.status);
+    const data = await r.json();
+    if (!data || !data.url) throw new Error('语音服务响应异常');
+    const audioPath = String(data.url).replace(/^\/+/, '');
+    const ar = await fetch(base + '/' + encodeURI(audioPath), { signal: ctrl.signal });
+    if (!ar.ok) throw new Error('获取音频失败 ' + ar.status);
+    const buf = Buffer.from(await ar.arrayBuffer());
+    if (buf.length < 100) throw new Error('音频内容为空');
+    return buf;
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('语音生成超时');
+    if (e && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test((e.message || '') + ((e.cause && e.cause.message) || ''))) {
+      throw new Error('无法连接语音服务，请先在电脑上启动小云语音服务');
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function doTtsGenerate(clean) {
+  fs.mkdirSync(TTS_DIR, { recursive: true });
+  const key = ttsCacheKey(clean);
+  const file = path.join(TTS_DIR, key + '.wav');
+  if (fs.existsSync(file)) return fs.readFileSync(file);
+  const segs = splitTtsText(clean, config.ttsSegmentChars);
+  if (!segs.length) throw new Error('没有可朗读的文字');
+  const parts = [];
+  for (const seg of segs) {
+    parts.push(await ttsSynthesizeOne(seg));
+  }
+  const wav = concatWavs(parts);
+  fs.writeFileSync(file, wav);
+  pruneTtsCache();
+  return wav;
+}
+
+function ttsGenerate(text) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return Promise.reject(new Error('没有可朗读的文字'));
+  const key = ttsCacheKey(clean);
+  if (ttsInflight.has(key)) return ttsInflight.get(key);
+  const run = ttsChain.then(() => doTtsGenerate(clean));
+  ttsInflight.set(key, run);
+  const settled = run.then(
+    v => { ttsInflight.delete(key); return v; },
+    e => { ttsInflight.delete(key); throw e; }
+  );
+  ttsChain = settled.catch(() => {});
+  return settled;
+}
+
+function pruneTtsCache() {
+  try {
+    fs.mkdirSync(TTS_DIR, { recursive: true });
+    const files = fs.readdirSync(TTS_DIR)
+      .filter(f => f.endsWith('.wav'))
+      .map(f => ({ f, t: fs.statSync(path.join(TTS_DIR, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    for (const it of files.slice(200)) {
+      try { fs.unlinkSync(path.join(TTS_DIR, it.f)); } catch (_) {}
+    }
+  } catch (_) {}
+}
+
 async function apiDispatch(method, params, clientId) {
   const c = await getClient();
   switch (method) {
@@ -706,6 +848,10 @@ async function apiDispatch(method, params, clientId) {
       return { connected: !!(c && c.ready) };
     case 'ping':
       return { ok: true, room: config.relayRoomCode, version: VERSION, time: Date.now() };
+    case 'ttsGenerate': {
+      const buf = await ttsGenerate(params.text);
+      return { ok: true, mime: 'audio/wav', audioB64: buf.toString('base64') };
+    }
     case 'phoneApps':
       return phoneRpc('listApps', {}, 30000);
     case 'phoneUninstall': {
@@ -942,6 +1088,12 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, await apiDispatch('status', {}));
       return;
     }
+    if (p === '/api/tts' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      const buf = await ttsGenerate(body.text);
+      sendJson(res, 200, { ok: true, mime: 'audio/wav', audioB64: buf.toString('base64') });
+      return;
+    }
     if (p === '/api/phone/apps' && req.method === 'POST') {
       sendJson(res, 200, await apiDispatch('phoneApps', {}));
       return;
@@ -1042,6 +1194,7 @@ const server = http.createServer((req, res) => {
 });
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+pruneTtsCache();
 server.listen(config.port, '0.0.0.0', () => {
   console.log('');
   console.log('==============================================');
