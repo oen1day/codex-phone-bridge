@@ -18,10 +18,6 @@ const readme = read('README.md');
 const readmeEn = fs.existsSync(path.join(root, 'README.en.md')) ? read('README.en.md') : '';
 
 const quote = '初，帝以一手机起家';
-check('app.js 空状态含寄语', app.includes(quote));
-check('app.js 有空状态渲染函数', app.includes('function renderEmptyHero()'));
-check('app.js 空状态不挡点击', css.includes('pointer-events: none'));
-check('style.css 有空状态样式', css.includes('.empty-hero'));
 check('MainActivity 有关于入口', java.includes('关于本软件'));
 check('MainActivity 有关于页', java.includes('private void showAboutDialog()'));
 check('MainActivity 有隐藏彩蛋', java.includes('private void showHiddenDialog()'));

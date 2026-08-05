@@ -112,7 +112,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.4';
+const VERSION = '10.6';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -1083,11 +1083,13 @@ async function readThreadTurns(threadId) {
       try {
         await c.call('thread/resume', { threadId });
       } catch (e2) {
-        console.error('[codex] 恢复线程失败: ' + (e2 && e2.message));
-        // 刚创建的空线程没有 rollout 文件是正常现象，按空对话返回，不再报错
-        if (/no rollout|not materialized/i.test((e2 && e2.message) || '')) {
+        const e2msg = (e2 && e2.message) || '';
+        // 刚创建的空线程没有 rollout 文件是正常现象：正常提示并按空对话返回
+        if (/no rollout|not materialized/i.test(e2msg)) {
+          console.log('[codex] 空线程（尚无轮次），按空对话返回: ' + threadId);
           return { thread: { id: threadId, title: '', status: { type: 'idle' }, turns: [] } };
         }
+        console.error('[codex] 恢复线程失败: ' + e2msg);
       }
       try {
         return await c.call('thread/read', { threadId, includeTurns: true });
@@ -1246,7 +1248,12 @@ async function apiDispatch(method, params, clientId) {
           try {
             await c.call('thread/resume', { threadId });
           } catch (e2) {
-            console.error('[codex] 恢复线程失败: ' + (e2 && e2.message));
+            const e2msg = (e2 && e2.message) || '';
+            if (/no rollout|not materialized/i.test(e2msg)) {
+              console.log('[codex] 空线程（尚无轮次），继续发起回合: ' + threadId);
+            } else {
+              console.error('[codex] 恢复线程失败: ' + e2msg);
+            }
           }
           result = await c.call('turn/start', tp);
         } else {
