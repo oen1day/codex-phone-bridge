@@ -1,4 +1,7 @@
-// 发布前验证：刷新重建后朗读按钮按文本重新绑定（防止声音在播但按钮灰掉）
+// 发布前验证（9.7）：刷新重建后朗读按钮状态恢复路径
+// 1) setSpeakBtn 从 DOM 按 _speakKey 找回按钮（注册表被刷新清空时）
+// 2) restoreSpeakBtnState 刷新后强制回填当前会话状态
+// 3) finishTts 用旧 key 收尾时，复位当前活跃会话的按钮（9.6 修复）
 const fs = require('fs');
 const path = require('path');
 const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
@@ -35,19 +38,6 @@ function makeBtn() {
   };
 }
 
-function cleanTtsText(text) {
-  let s = String(text || '');
-  s = s.replace(/```[\s\S]*?```/g, ' ').replace(/~~~[\s\S]*?~~~/g, ' ');
-  s = s.replace(/`([^`]*)`/g, '$1');
-  s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
-  s = s.replace(/https?:\/\/[^\s，。！？；、\)\],!?;:<>'"\u4e00-\u9fff]+/g, ' ');
-  s = s.replace(/^\s{0,3}(#{1,6}\s+|>\s*|\*\s+|-{1,2}\s+|\d+[.、]\s+)/gm, ' ');
-  s = s.replace(/(\*\*|__|\*|_|~~)/g, '');
-  s = s.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, ' ');
-  s = s.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n');
-  return s.trim();
-}
-
 let pass = 0, fail = 0;
 function check(name, cond) {
   if (cond) { pass++; console.log('PASS ' + name); }
@@ -55,56 +45,41 @@ function check(name, cond) {
 }
 
 const fnSet = extractFn('setSpeakBtn');
-const fnEnsure = extractFn('ensureTtsBtn');
 const fnRestore = extractFn('restoreSpeakBtnState');
 const fnFinish = extractFn('finishTts');
 
-const newBtn = makeBtn();
-newBtn._speakKey = 'c1_new-id';
-const speakButtons = new Map([['c1_new-id', newBtn]]);
-const agentEl = {
-  dataset: { msgId: 'new-id' },
-  querySelectorAll: () => [{ classList: { add() {}, remove() {} }, textContent: '新回复内容' }]
-};
+const btn = makeBtn();
+btn._speakKey = 'c1_new-id';
+const speakButtons = new Map(); // 模拟刷新后注册表被清空
+
 const ctx = {
   console,
   speakButtons,
-  document: { querySelectorAll: () => [newBtn] },
+  document: { querySelectorAll: () => [btn] },
   state: { currentId: 'c1' },
-  messagesEl: { querySelectorAll: () => [agentEl] },
-  ttsActiveKey: 'c1_old-id',
+  ttsActiveKey: 'c1_new-id',
   ttsActiveState: 'loading',
-  ttsActiveText: '新回复内容',
-  ttsKey: (a, b) => a + '_' + b,
-  cleanTtsText,
-  collectAgentText: (el) => el.querySelectorAll().map(b => (b.textContent || '').trim()).join('\n')
+  ttsKey: (a, b) => a + '_' + b
 };
-const ensureTtsBtn = evalFn('ensureTtsBtn', fnEnsure, ctx);
-ctx.ensureTtsBtn = ensureTtsBtn;
+
 const setSpeakBtn = evalFn('setSpeakBtn', fnSet, ctx);
 ctx.setSpeakBtn = setSpeakBtn;
-
-setSpeakBtn('c1_old-id', 'loading');
-check('刷新后按文本重绑定到新id', ctx.ttsActiveKey === 'c1_new-id');
-check('新按钮显示生成中', newBtn.textContent === '⏳ 生成中…');
-
-ctx.ttsActiveKey = 'c1_old-id'; // 模拟 playTtsSegment 播放前重新认领
-setSpeakBtn('c1_old-id', 'playing');
-check('播放中状态应用到新按钮', newBtn.textContent === '⏹ 停止' && newBtn.classList.contains('speaking'));
-check('状态记录正确', ctx.ttsActiveState === 'playing');
-
 const restore = evalFn('restoreSpeakBtnState', fnRestore, ctx);
-restore();
-check('恢复函数保持播放中', newBtn.textContent === '⏹ 停止');
+const finishTts = evalFn('finishTts', fnFinish, ctx);
 
-// 播放结束：finishTts 用旧 key 调用时，应复位已重绑定的新按钮
+setSpeakBtn('c1_new-id', 'loading');
+check('注册表被清后按 _speakKey 从 DOM 找回', speakButtons.get('c1_new-id') === btn);
+check('找回后按钮显示生成中', btn.textContent === '⏳ 生成中…');
+
+ctx.ttsActiveState = 'playing';
+restore();
+check('刷新后回填保持播放中', btn.textContent === '⏹ 停止' && btn.classList.contains('speaking'));
+
 ctx.ttsActiveKey = 'c1_new-id';
 ctx.ttsActiveState = 'playing';
-ctx.ttsActiveText = '新回复内容';
-const finishTts = evalFn('finishTts', fnFinish, ctx);
 finishTts('c1_old-id');
-check('播放结束后按钮回到朗读', newBtn.textContent === '🔊 朗读');
-check('播放结束后会话键清空', ctx.ttsActiveKey === null && ctx.ttsActiveState === 'idle');
+check('结束复位当前活跃按钮（兼容旧 key）', btn.textContent === '🔊 朗读');
+check('结束后会话键清空', ctx.ttsActiveKey === null && ctx.ttsActiveState === 'idle');
 
-console.log('按钮重绑定验证: ' + pass + ' 通过 / ' + fail + ' 失败');
+console.log('按钮状态恢复验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

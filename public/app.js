@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '9.6';
+  const APP_VERSION = '9.7';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -86,7 +86,6 @@
   const ttsGenerating = new Map();
   let ttsActiveKey = null;
   let ttsActiveState = 'idle';
-  let ttsActiveText = '';
   let ttsSession = 0;
   const ttsWaitResolvers = new Set();
   let ttsAudioEl = null;
@@ -1708,7 +1707,6 @@
   function setSpeakBtn(key, state) {
     if (key === ttsActiveKey) ttsActiveState = state;
     let btn = speakButtons.get(key);
-    if (!btn && key === ttsActiveKey) btn = ensureTtsBtn(key);
     if (!btn && key) {
       // 注册表可能被刷新清掉但 DOM 还在：从 DOM 找回并重新注册
       const all = document.querySelectorAll('.speak-btn');
@@ -1731,18 +1729,6 @@
     } else {
       btn.textContent = '🔊 朗读';
     }
-  }
-
-  // 刷新重建后按钮归属可能变化（消息 id 变化）：按文本重新绑定当前会话
-  function ensureTtsBtn(key) {
-    if (!ttsActiveText || !state.currentId) return null;
-    const agents = messagesEl.querySelectorAll('.msg.agent');
-    const last = agents[agents.length - 1];
-    if (!last || !last.dataset.msgId) return null;
-    if (cleanTtsText(collectAgentText(last)).trim() !== ttsActiveText) return null;
-    const newKey = ttsKey(state.currentId, last.dataset.msgId);
-    ttsActiveKey = newKey;
-    return speakButtons.get(newKey) || null;
   }
 
   // 后台刷新重建界面后，恢复当前朗读按钮的状态
@@ -1777,7 +1763,6 @@
     const k = ttsActiveKey;
     ttsActiveKey = null;
     ttsActiveState = 'idle';
-    ttsActiveText = '';
     if (ttsLanReader) {
       try { ttsLanReader.cancel(); } catch (_) {}
       ttsLanReader = null;
@@ -1913,11 +1898,10 @@
   }
 
   function finishTts(key) {
-    // 兼容刷新后按钮被重绑定过的新 key：始终复位当前活跃会话的按钮
+    // 兼容刷新后按钮归属变化：始终复位当前活跃会话的按钮
     const k = ttsActiveKey || key;
     ttsActiveKey = null;
     ttsActiveState = 'idle';
-    ttsActiveText = '';
     setSpeakBtn(k, 'idle');
   }
 
@@ -2021,7 +2005,6 @@
       showToast('这条消息没有可朗读的文字', true);
       return;
     }
-    ttsActiveText = clean;
     setSpeakBtn(msgKey, 'loading');
     showToast('正在生成语音…');
 
