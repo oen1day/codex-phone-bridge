@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '8.0';
+  const APP_VERSION = '8.1';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -329,6 +329,11 @@
         onError: (s) => {
           setStatus('配对异常: ' + s, true);
           showToast('⚠ ' + s + '：请检查手机里的配对码和访问密码是否与电脑一致', true);
+        },
+        onChunkError: (s) => {
+          if (ttsActiveKey || ttsStreamState) {
+            showToast('音频传输中断，正在重试…', true);
+          }
         },
         onStatus: (s) => {
           if (s === 'connected') {
@@ -1612,22 +1617,32 @@
     if (cached) return cached;
     if (ttsGenerating.has(key)) return ttsGenerating.get(key);
     const p = (async () => {
-      const res = await apiCall('ttsGenerate', { text: segText || '' }, 600000);
-      if (!res || !res.audioB64) throw new Error('语音生成失败');
-      const blob = b64ToBlob(res.audioB64, res.mime || 'audio/wav');
-      await ttsSaveBlob(key, blob);
-      const meta = getTtsMeta();
-      const prev = meta[msgKey] || {};
-      meta[msgKey] = {
-        convId: String(convId),
-        msgId: String(msgId),
-        ts: Date.now(),
-        temp: !!temp,
-        segs: Math.max(idx + 1, prev.segs || 0)
-      };
-      setTtsMeta(meta);
-      cleanupTts();
-      return blob;
+      // 中继分片可能丢块：缩短超时并自动重试一次（服务端有缓存，重试通常秒回）
+      let lastErr = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await apiCall('ttsGenerate', { text: segText || '' }, 120000);
+          if (!res || !res.audioB64) throw new Error('语音生成失败');
+          const blob = b64ToBlob(res.audioB64, res.mime || 'audio/wav');
+          await ttsSaveBlob(key, blob);
+          const meta = getTtsMeta();
+          const prev = meta[msgKey] || {};
+          meta[msgKey] = {
+            convId: String(convId),
+            msgId: String(msgId),
+            ts: Date.now(),
+            temp: !!temp,
+            segs: Math.max(idx + 1, prev.segs || 0)
+          };
+          setTtsMeta(meta);
+          cleanupTts();
+          return blob;
+        } catch (e) {
+          lastErr = e;
+          if (attempt === 0) await sleep(1500);
+        }
+      }
+      throw lastErr;
     })();
     ttsGenerating.set(key, p);
     p.catch(() => {}).then(() => ttsGenerating.delete(key));
@@ -1730,7 +1745,16 @@
       if (!s || s.sid !== sid || session !== ttsSession) { resolve(null); return; }
       if (s.chunks.length) { resolve({ b64: s.chunks.shift() }); return; }
       if (s.ended) { resolve({ end: true, ok: s.ok, error: s.error }); return; }
-      s.resolvers.push(resolve);
+      const timer = setTimeout(() => {
+        const i = s.resolvers.indexOf(wrapped);
+        if (i >= 0) s.resolvers.splice(i, 1);
+        resolve({ end: true, ok: false, error: '等待音频超时' });
+      }, 60000);
+      const wrapped = (frame) => {
+        clearTimeout(timer);
+        resolve(frame);
+      };
+      s.resolvers.push(wrapped);
     });
   }
 
@@ -1910,7 +1934,7 @@
       return;
     }
 
-    // 2) 手动点播：自动朗读关闭时只预生成首段，先播首段再把剩余文本送流式
+    // 2) 手动点播：自动朗读关闭时只预生成首段，先播首段再把剩余部分生成/流式接上
     if (!auto && st && st.partial && st.restText) {
       const firstBlob = b64ToBlob(st.audioB64, st.mime || 'audio/wav');
       try {
@@ -1928,7 +1952,13 @@
       if (session !== ttsSession || state.currentId !== convId) return;
       const played = await playTtsSegment(firstBlob, session);
       if (!played || session !== ttsSession) return;
-      if (!st.restText) {
+      if (relayCfg) {
+        // 中继模式：剩余部分走整段合成（可靠，不依赖音频流分片）
+        const segs = splitTtsSegments(text);
+        if (segs.length > 1) {
+          await playSegmentsLoop(convId, msgId, segs, 1, auto, temp, session);
+          return;
+        }
         if (session === ttsSession) finishTts(msgKey);
         return;
       }
@@ -1936,8 +1966,43 @@
       return;
     }
 
-    // 3) 未命中缓存，整段走流式（边生成边播）
+    // 3) 未命中缓存
+    if (relayCfg) {
+      // 中继模式：逐段整段合成（每条 RPC 独立、有超时和重试，不会再永久卡住）
+      const segs = splitTtsSegments(text);
+      await playSegmentsLoop(convId, msgId, segs, 0, auto, temp, session);
+      return;
+    }
+    // 局域网模式：走流式（边生成边播）
     await runTtsStream(convId, msgId, clean, 0, auto, temp, session);
+  }
+
+  async function playSegmentsLoop(convId, msgId, segs, startIdx, auto, temp, session) {
+    const msgKey = ttsKey(convId, msgId);
+    for (let i = startIdx; i < segs.length; i++) {
+      if (session !== ttsSession) return;
+      setSpeakBtn(msgKey, 'loading');
+      let blob;
+      try {
+        if (i === startIdx) showToast('正在生成语音…');
+        blob = await ensureTtsSegment(convId, msgId, i, segs[i], temp);
+      } catch (e) {
+        if (session === ttsSession) {
+          finishTts(msgKey);
+          showToast('朗读失败: ' + ((e && e.message) || e), true);
+        }
+        return;
+      }
+      if (session !== ttsSession) return;
+      if (state.currentId !== convId) {
+        finishTts(msgKey);
+        return;
+      }
+      if (auto && !autoSpeak) continue;
+      const played = await playTtsSegment(blob, session);
+      if (!played) return;
+    }
+    if (session === ttsSession) finishTts(msgKey);
   }
 
   async function playMessageSegments(convId, msgId, text, auto, temp) {
@@ -1947,18 +2012,27 @@
     const session = ++ttsSession;
     ttsActiveKey = msgKey;
     const segs = splitTtsSegments(text);
-    if (!segs.length) {
+    const meta0 = getTtsMeta();
+    const rec = meta0[msgKey];
+    const cachedN = rec ? (rec.segs || 0) : 0;
+    const n = Math.max(segs.length, cachedN);
+    if (!n) {
       finishTts(msgKey);
       showToast('这条消息没有可朗读的文字', true);
       return;
     }
-    for (let i = 0; i < segs.length; i++) {
+    for (let i = 0; i < n; i++) {
       if (session !== ttsSession) return;
       setSpeakBtn(msgKey, 'loading');
       let blob;
       try {
         if (i === 0) showToast('正在生成语音…');
-        blob = await ensureTtsSegment(convId, msgId, i, segs[i], temp);
+        if (i < segs.length) {
+          blob = await ensureTtsSegment(convId, msgId, i, segs[i], temp);
+        } else {
+          blob = await ttsLoadBlob(ttsSegKey(msgKey, i));
+        }
+        if (!blob) continue;
       } catch (e) {
         if (session === ttsSession) {
           finishTts(msgKey);

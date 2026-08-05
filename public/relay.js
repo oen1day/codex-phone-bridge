@@ -172,6 +172,7 @@
       this.onMessage = opts.onMessage || function () {};
       this.onStatus = opts.onStatus || function () {};
       this.onError = opts.onError || null;
+      this.onChunkError = opts.onChunkError || null;
       this.base = 'codexbridge/v1/' + this.roomCode;
       this.inTopic = this.role === 'pc' ? this.base + '/up' : this.base + '/down';
       this.outTopic = this.role === 'pc' ? this.base + '/down' : this.base + '/up';
@@ -330,11 +331,21 @@
 
     _addChunk(env) {
       const entry = this.chunks[env.c] || { total: env.t, parts: [], count: 0 };
+      if (!entry.timer) {
+        // 分片重组超时：公共 MQTT 是 QoS 0，可能丢块，不能永远等
+        entry.timer = setTimeout(() => {
+          if (this.chunks[env.c] === entry) delete this.chunks[env.c];
+          if (this.onChunkError) {
+            try { this.onChunkError('中继消息分片不完整，已丢弃'); } catch (_) {}
+          }
+        }, 10000);
+      }
       entry.parts[env.i] = b64ToBytes(env.b);
       entry.count++;
       this.chunks[env.c] = entry;
       if (entry.count >= entry.total) {
         delete this.chunks[env.c];
+        if (entry.timer) clearTimeout(entry.timer);
         let len = 0;
         for (const p of entry.parts) len += p.length;
         const full = new Uint8Array(len);
@@ -369,6 +380,11 @@
 
     stop() {
       this.closed = true;
+      for (const c of Object.keys(this.chunks)) {
+        const entry = this.chunks[c];
+        if (entry && entry.timer) clearTimeout(entry.timer);
+      }
+      this.chunks = {};
       if (this._retryTimer) {
         clearTimeout(this._retryTimer);
         this._retryTimer = null;
