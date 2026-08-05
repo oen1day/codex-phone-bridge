@@ -12,3 +12,6 @@ make-release-zip.ps1
 
 __pycache__/
 *.pyc
+
+logs/
+

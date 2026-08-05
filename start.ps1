@@ -71,4 +71,8 @@ Write-Host '  关闭本窗口即停止服务' -ForegroundColor DarkGray
 Write-Host '==============================================' -ForegroundColor Cyan
 Write-Host ''
 
-& $node (Join-Path $root 'server.js')
+# 日志同时显示在窗口里并自动存文件（诊断用，用户无需查看）
+$logDir = Join-Path $root 'logs'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$bridgeLog = Join-Path $logDir 'bridge.log'
+& $node (Join-Path $root 'server.js') 2>&1 | Tee-Object -FilePath $bridgeLog -Append
