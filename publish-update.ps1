@@ -87,6 +87,10 @@ function New-ReleaseZip {
   }
   $ksJunk = Join-Path $tmp 'android\debug.keystore'
   if (Test-Path $ksJunk) { Remove-Item -LiteralPath $ksJunk -Force }
+  $buildJunk = Join-Path $tmp 'android\build'
+  if (Test-Path $buildJunk) { Remove-Item -LiteralPath $buildJunk -Recurse -Force }
+  $wwwJunk = Join-Path $tmp 'android\assets\www'
+  if (Test-Path $wwwJunk) { Remove-Item -LiteralPath $wwwJunk -Recurse -Force }
   $outZip = Join-Path $root 'CodexPhoneBridge-PC.zip'
   if (Test-Path $outZip) { Remove-Item -LiteralPath $outZip -Force }
   $zip = [System.IO.Compression.ZipFile]::Open($outZip, [System.IO.Compression.ZipArchiveMode]::Create)

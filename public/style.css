@@ -70,12 +70,18 @@ body {
 .toast-overlay.err { background: #3a1f1f; border-color: #7f3b3b; color: #fca5a5; }
 .system-line { text-align: center; color: #7c8698; font-size: 12px; margin: 6px 0 12px; }
 
-.msg { margin-bottom: 14px; display: flex; }
-.msg.user { justify-content: flex-end; }
+.msg { margin-bottom: 14px; display: flex; flex-direction: column; }
+.msg.user { align-items: flex-end; }
+.msg.agent { align-items: flex-start; }
+.msg .wrap { max-width: 86%; display: flex; flex-direction: column; }
+.msg.user .wrap { align-items: flex-end; }
+.msg.user .msg-actions { align-self: flex-start; }
+.msg.agent .msg-actions { align-self: flex-end; }
 .msg .bubble {
-  max-width: 86%; padding: 10px 13px; border-radius: 14px; font-size: 15px;
+  max-width: 100%; padding: 10px 13px; border-radius: 14px; font-size: 15px;
   line-height: 1.55; word-break: break-word; white-space: pre-wrap;
 }
+.msg.agent > .bubble { max-width: 86%; }
 .msg.user .bubble { background: #10a37f; color: #fff; border-bottom-right-radius: 4px; }
 .msg.agent .bubble { background: #1c212c; border: 1px solid #2a3140; border-bottom-left-radius: 4px; }
 .msg.user .imgs { display: flex; gap: 6px; margin-bottom: 6px; justify-content: flex-end; flex-wrap: wrap; }
