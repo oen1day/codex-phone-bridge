@@ -8,7 +8,7 @@ else {
     if ($cand -and (Test-Path $cand)) { $sdk = $cand; break }
   }
 }
-if (-not $sdk) { $sdk = 'C:\Users\add\AppData\Local\Android\Sdk' }
+if (-not $sdk) { throw '未找到 Android SDK，请安装 Android SDK 或设置 ANDROID_SDK_ROOT 环境变量' }
 $buildToolsDir = Get-ChildItem (Join-Path $sdk 'build-tools') -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
 $platformDir = Get-ChildItem (Join-Path $sdk 'platforms') -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
 if (-not $buildToolsDir) { throw "找不到 Android 打包工具: $(Join-Path $sdk 'build-tools')" }
@@ -24,18 +24,26 @@ $ErrorActionPreference = 'Continue'
 $javaHome = ''
 $javaCandidates = @()
 if ($env:JAVA_HOME) { $javaCandidates += $env:JAVA_HOME }
-$javaCandidates += 'C:\Users\add\.jdks\openjdk-20.0.1'
+$javaCandidates += "$env:USERPROFILE\.jdks"
 $javaCandidates += 'C:\Program Files\Android\Android Studio\jbr'
 $javaCandidates += 'C:\Program Files\Eclipse Adoptium'
 $javaCandidates += 'C:\Program Files\Microsoft\jdk-11*'
 foreach ($c in $javaCandidates) {
   $j = Join-Path $c 'bin\java.exe'
-  if (-not (Test-Path $j)) { continue }
-  $ver = (& $j -version 2>&1 | Select-Object -First 1)
-  if ($ver -match 'version "(\d+)') {
-    $major = [int]$Matches[1]
-    if ($major -ge 11) { $javaHome = $c; break }
+  if (-not (Test-Path $j)) {
+    $cands = Get-ChildItem -Path $c -Filter java.exe -Recurse -Depth 3 -ErrorAction SilentlyContinue
+    foreach ($fj in $cands) {
+      $ver = (& $fj.FullName -version 2>&1 | Select-Object -First 1)
+      if ($ver -match 'version "(\d+)' -and [int]$Matches[1] -ge 11) {
+        $javaHome = Split-Path -Parent (Split-Path -Parent $fj.FullName)
+        break
+      }
+    }
+    if ($javaHome) { break }
+    continue
   }
+  $ver = (& $j -version 2>&1 | Select-Object -First 1)
+  if ($ver -match 'version "(\d+)' -and [int]$Matches[1] -ge 11) { $javaHome = $c; break }
 }
 if (-not $javaHome) {
   $j = Get-ChildItem 'C:\Program Files\Java' -Filter 'java.exe' -Recurse -Depth 2 -ErrorAction SilentlyContinue | Where-Object {

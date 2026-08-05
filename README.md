@@ -98,7 +98,7 @@ version.json 的内容格式：
 
 - `password`：访问密码，改成你自己的（重要）
 - `port`：端口，默认 8787
-- `workspace`：Codex 的工作目录，默认 `C:\Users\add\Documents\Codex`
+- `workspace`：Codex 的工作目录（首次运行默认取“用户目录/Documents/Codex”，可自行修改）
 - `model`：模型名，留空就是用你电脑上配置的默认模型（DeepSeek）
 - `approvalPolicy`：
   - `on-request`：每个要权限的命令都会问你（推荐）

@@ -250,3 +250,19 @@ body { background: #0b0e14; }
   background: #0b0e14; border-radius: 10px; padding: 8px; margin-top: 6px;
   white-space: pre-wrap; word-break: break-all;
 }
+.msg-actions { display: flex; gap: 6px; margin-top: 5px; }
+.msg-act {
+  height: 1.4em; line-height: 1.4em; font-size: 11px; padding: 0 8px;
+  border-radius: 8px; border: 1px solid #263043; background: #1a2130;
+  color: #9fb0c7; cursor: pointer;
+}
+.msg-act:active { background: #232c3d; }
+.quote-bar {
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: #1a2130; border-top: 1px solid #263043; border-bottom: 1px solid #1c2431;
+}
+.quote-bar .quote-author { color: #22d3a5; font-size: 12px; flex-shrink: 0; }
+.quote-bar .quote-text {
+  color: #9fb0c7; font-size: 12px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}

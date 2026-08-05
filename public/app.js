@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '6.3';
+  const APP_VERSION = '6.4';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -75,6 +75,7 @@
   let lastTurnActivityAt = 0;
   let liveReplyId = null;
   let liveSeq = 0;
+  let quotedMsg = null;
   const replySeen = {};
 
   // ---------- 通信层（局域网 / 中继） ----------
@@ -551,6 +552,7 @@
     stopTurnPolling();
     stopTurnWatchdog();
     liveReplyId = null;
+    clearQuote();
     state.currentId = id;
     state.blocks.clear();
     state.approvals.clear();
@@ -645,7 +647,13 @@
     if (last && last.classList.contains('msg') && last.classList.contains('agent')) return last;
     const el = document.createElement('div');
     el.className = 'msg agent';
-    el.innerHTML = '<div class="bubble"></div>';
+    el.innerHTML = '<div class="bubble"></div>' +
+      '<div class="msg-actions">' +
+      '<button class="msg-act">复制</button><button class="msg-act">引用</button>' +
+      '</div>';
+    const btns = el.querySelectorAll('.msg-act');
+    btns[0].addEventListener('click', () => copyText(el.querySelector('.bubble').innerText.trim()));
+    btns[1].addEventListener('click', () => setQuote('AI', el.querySelector('.bubble').innerText.trim()));
     messagesEl.appendChild(el);
     return el;
   }
@@ -657,7 +665,13 @@
     if (images && images.length) {
       imgs = '<div class="imgs">' + images.map(u => '<img src="' + u + '">').join('') + '</div>';
     }
-    el.innerHTML = '<div class="wrap">' + imgs + '<div class="bubble">' + escapeHtml(text) + '</div></div>';
+    el.innerHTML = '<div class="wrap">' + imgs + '<div class="bubble">' + escapeHtml(text) + '</div></div>' +
+      '<div class="msg-actions">' +
+      '<button class="msg-act">复制</button><button class="msg-act">引用</button>' +
+      '</div>';
+    const btns = el.querySelectorAll('.msg-act');
+    btns[0].addEventListener('click', () => copyText(text));
+    btns[1].addEventListener('click', () => setQuote('我', text));
     messagesEl.appendChild(el);
     scrollBottom();
   }
@@ -1069,6 +1083,11 @@
     const text = inputBox.value.trim();
     const images = state.pendingImages.slice();
     if (!text && !images.length) return;
+    let sendText = text;
+    if (quotedMsg) {
+      sendText = '【引用 ' + quotedMsg.author + '】' + quotedMsg.text + '\n' + text;
+      clearQuote();
+    }
     inputBox.value = '';
     state.pendingImages = [];
     renderImagePreviews();
@@ -1085,12 +1104,12 @@
         return;
       }
     }
-    addUserMessage(text, images.map(i => i.dataUrl));
+    addUserMessage(sendText, images.map(i => i.dataUrl));
 
     try {
       const data = await apiCall('turnStart', {
         threadId: state.currentId,
-        text,
+        text: sendText,
         images: images.map(i => ({ name: i.name, data: i.dataUrl })),
         effort: currentEffort
       });
@@ -1226,6 +1245,48 @@
     scrollBottom();
   }
 
+  function copyText(text) {
+    const done = () => showToast('已复制');
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(() => legacyCopy(text, done));
+      } else {
+        legacyCopy(text, done);
+      }
+    } catch (_) {
+      legacyCopy(text, done);
+    }
+  }
+
+  function legacyCopy(text, done) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch (_) {}
+  }
+
+  function setQuote(author, text) {
+    quotedMsg = { author, text };
+    const a = $('quoteAuthor');
+    const t = $('quoteText');
+    if (a) a.textContent = '引用 ' + author;
+    if (t) t.textContent = String(text || '').replace(/\s+/g, ' ').slice(0, 80);
+    $('quoteBar').classList.remove('hidden');
+    inputBox.focus();
+  }
+
+  function clearQuote() {
+    quotedMsg = null;
+    $('quoteBar').classList.add('hidden');
+  }
+
   function traceEvent(name) {
     const el = $('eventTrace');
     if (!el) return;
@@ -1280,6 +1341,7 @@
   if (!relayCfg) $('claimBtn').classList.add('hidden');
   $('sendBtn').addEventListener('click', send);
   $('interruptBtn').addEventListener('click', interrupt);
+  $('quoteCancel').addEventListener('click', clearQuote);
   $('shareKeyBtn').addEventListener('click', quickConfig);
   $('refreshBtn').addEventListener('click', () => location.reload());
   if (window.AndroidBridge && window.AndroidBridge.openSettings) {
