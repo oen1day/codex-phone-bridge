@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '7.8';
+const VERSION = '7.9';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -710,7 +710,16 @@ function broadcastTts(obj) {
   }
 }
 
-function readTtsStreamFrames(text, onFrame, onEnd) {
+function cancelTtsJob(jobId) {
+  const base = String(config.ttsUrl || 'http://127.0.0.1:8866').replace(/\/+$/, '');
+  fetch(base + '/tts/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job_id: jobId || '' })
+  }).catch(() => {});
+}
+
+function readTtsStreamFrames(text, jobId, onFrame, onEnd) {
   const base = String(config.ttsUrl || 'http://127.0.0.1:8866').replace(/\/+$/, '');
   const ctrl = new AbortController();
   const task = (async () => {
@@ -721,7 +730,8 @@ function readTtsStreamFrames(text, onFrame, onEnd) {
         text: String(text || ''),
         emotion: config.ttsEmotion || '平静日常',
         emo_alpha: 1.0,
-        use_random: false
+        use_random: false,
+        job_id: jobId || ''
       }),
       signal: ctrl.signal
     });
@@ -933,11 +943,12 @@ async function apiDispatch(method, params, clientId) {
       };
       (async () => {
         try {
-          const r = readTtsStreamFrames(text, (frame, seq) => {
+          const r = readTtsStreamFrames(text, sid, (frame, seq) => {
             broadcastTts({ type: 'tts-stream', id: sid, seq, b64: frame.toString('base64'), to: clientId });
           }, () => finish(true, ''));
           entry.ctrl = r.ctrl;
           entry.timer = setTimeout(() => {
+            cancelTtsJob(sid);
             try { entry.ctrl && entry.ctrl.abort(); } catch (_) {}
             finish(false, '语音生成超时');
           }, 12 * 60 * 1000);
@@ -953,6 +964,7 @@ async function apiDispatch(method, params, clientId) {
       if (entry) {
         entry.done = true;
         if (entry.timer) clearTimeout(entry.timer);
+        cancelTtsJob(params.id);
         try { entry.ctrl && entry.ctrl.abort(); } catch (_) {}
         ttsStreams.delete(params.id);
       }
@@ -1204,8 +1216,10 @@ async function handleApi(req, res, url) {
       const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-cache' });
       try {
+        const lanJob = 'lan' + Date.now().toString(36) + '-' + (++ttsStreamSeq);
         const r = readTtsStreamFrames(
           body.text,
+          lanJob,
           (frame) => { try { res.write(frame); } catch (_) {} },
           () => { try { res.end(); } catch (_) {} }
         );
@@ -1213,6 +1227,12 @@ async function handleApi(req, res, url) {
       } catch (e) {
         try { res.end(); } catch (_) {}
       }
+      return;
+    }
+    if (p === '/api/tts/cancel' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      cancelTtsJob(body.job_id);
+      sendJson(res, 200, { ok: true });
       return;
     }
     if (p === '/api/phone/apps' && req.method === 'POST') {
