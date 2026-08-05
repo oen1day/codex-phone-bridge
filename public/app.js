@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '8.3';
+  const APP_VERSION = '8.4';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -82,6 +82,7 @@
   const speakButtons = new Map();
   const ttsMem = new Map();
   const ttsGenerating = new Map();
+  let ttsGenEpoch = 0;
   let ttsActiveKey = null;
   let ttsSession = 0;
   const ttsWaitResolvers = new Set();
@@ -861,11 +862,14 @@
       for (const b of state.blocks.values()) b.classList.remove('typing');
       loadThreads();
       const tid = params.turn && params.turn.id;
+      // 先用当前界面立即触发自动朗读（去掉固定 400ms 等待）
+      const triggered = maybeAutoSpeak();
+      // 刷新只做后台修复；立即触发未命中时（事件丢失）刷新后补一次
       setTimeout(async () => {
         if (state.turnId && state.turnId !== tid) return;
         await refreshThreadNow();
-        maybeAutoSpeak();
-      }, 400);
+        if (!triggered) maybeAutoSpeak();
+      }, 0);
     } else if (method === 'turn/error') {
       stopTurnPolling();
       stopTurnWatchdog();
@@ -1182,6 +1186,8 @@
   // ---------- send ----------
   async function send() {
     stopSpeaking(); // 发送即停旧语音播放并取消旧合成
+    ttsGenEpoch++; // 使在途分段请求失效，避免旧任务污染新会话
+    ttsGenerating.clear();
     const text = inputBox.value.trim();
     const images = state.pendingImages.slice();
     if (!text && !images.length) return;
@@ -1617,6 +1623,7 @@
     const cached = await ttsLoadBlob(key);
     if (cached) return cached;
     if (ttsGenerating.has(key)) return ttsGenerating.get(key);
+    const epoch = ttsGenEpoch;
     const p = (async () => {
       // 中继分片可能丢块：缩短超时并自动重试一次（服务端有缓存，重试通常秒回）
       let lastErr = null;
@@ -1632,7 +1639,7 @@
             convId: String(convId),
             msgId: String(msgId),
             ts: Date.now(),
-            temp: !!temp,
+            temp: true, // 生成但未完整播放前标记为临时，播放完成后转永久
             segs: Math.max(idx + 1, prev.segs || 0)
           };
           setTtsMeta(meta);
@@ -1640,13 +1647,16 @@
           return blob;
         } catch (e) {
           lastErr = e;
+          if (epoch !== ttsGenEpoch) break; // 已发送新消息，放弃重试
           if (attempt === 0) await sleep(1500);
         }
       }
       throw lastErr;
     })();
     ttsGenerating.set(key, p);
-    p.catch(() => {}).then(() => ttsGenerating.delete(key));
+    p.catch(() => {}).then(() => {
+      if (epoch === ttsGenEpoch) ttsGenerating.delete(key);
+    });
     return p;
   }
 
@@ -1832,6 +1842,15 @@
     setSpeakBtn(key, 'idle');
   }
 
+  // 整条消息完整播放完成后，把缓存标记从“临时”转为“已播放”（避免未播完被误跳）
+  function markTtsPlayed(msgKey) {
+    const meta = getTtsMeta();
+    if (meta[msgKey]) {
+      meta[msgKey].temp = false;
+      setTtsMeta(meta);
+    }
+  }
+
   async function tryTtsStatus(text) {
     try {
       const st = await apiCall('ttsStatus', { text: text || '' }, 15000);
@@ -1865,6 +1884,7 @@
       return;
     }
     let idx = startIdx;
+    let playedAny = false;
     while (true) {
       if (session !== ttsSession) break;
       const frame = await nextTtsFrame(sid, session);
@@ -1896,7 +1916,7 @@
           convId: String(convId),
           msgId: String(msgId),
           ts: Date.now(),
-          temp: !!temp,
+          temp: true,
           segs: idx + 1
         };
         setTtsMeta(meta);
@@ -1906,9 +1926,13 @@
       if (auto && !autoSpeak) { idx++; continue; }
       const played = await playTtsSegment(blob, session);
       if (!played) break;
+      playedAny = true;
       idx++;
     }
-    if (session === ttsSession) finishTts(msgKey);
+    if (session === ttsSession) {
+      if (playedAny) markTtsPlayed(msgKey);
+      finishTts(msgKey);
+    }
   }
 
   async function playStreamMessage(convId, msgId, text, auto, temp) {
@@ -1938,7 +1962,10 @@
       const blob = b64ToBlob(st.audioB64, st.mime || 'audio/wav');
       if (session !== ttsSession || state.currentId !== convId) return;
       await playTtsSegment(blob, session);
-      if (session === ttsSession) finishTts(msgKey);
+      if (session === ttsSession) {
+        markTtsPlayed(msgKey);
+        finishTts(msgKey);
+      }
       return;
     }
 
@@ -1952,7 +1979,7 @@
           convId: String(convId),
           msgId: String(msgId),
           ts: Date.now(),
-          temp: !!temp,
+          temp: true,
           segs: 1
         };
         setTtsMeta(meta);
@@ -1987,6 +2014,7 @@
 
   async function playSegmentsLoop(convId, msgId, segs, startIdx, auto, temp, session) {
     const msgKey = ttsKey(convId, msgId);
+    let playedAny = false;
     for (let i = startIdx; i < segs.length; i++) {
       if (session !== ttsSession) return;
       setSpeakBtn(msgKey, 'loading');
@@ -2010,8 +2038,12 @@
       prefetchTtsSegment(convId, msgId, segs, i, temp);
       const played = await playTtsSegment(blob, session);
       if (!played) return;
+      playedAny = true;
     }
-    if (session === ttsSession) finishTts(msgKey);
+    if (session === ttsSession) {
+      if (playedAny) markTtsPlayed(msgKey);
+      finishTts(msgKey);
+    }
   }
 
   async function playMessageSegments(convId, msgId, text, auto, temp) {
@@ -2030,6 +2062,7 @@
       showToast('这条消息没有可朗读的文字', true);
       return;
     }
+    let playedAny = false;
     for (let i = 0; i < n; i++) {
       if (session !== ttsSession) return;
       setSpeakBtn(msgKey, 'loading');
@@ -2058,8 +2091,12 @@
       prefetchTtsSegment(convId, msgId, segs, i, temp);
       const played = await playTtsSegment(blob, session);
       if (!played) return;
+      playedAny = true;
     }
-    if (session === ttsSession) finishTts(msgKey);
+    if (session === ttsSession) {
+      if (playedAny) markTtsPlayed(msgKey);
+      finishTts(msgKey);
+    }
   }
 
   function onSpeakClick(agentEl) {
@@ -2082,18 +2119,19 @@
   }
 
   function maybeAutoSpeak() {
-    if (!state.currentId) return;
+    if (!state.currentId) return false;
     const agents = messagesEl.querySelectorAll('.msg.agent');
     const last = agents[agents.length - 1];
-    if (!last) return;
+    if (!last) return false;
     const msgId = last.dataset.msgId;
-    if (!msgId || msgId === turnStartLastMsgId) return;
+    if (!msgId || msgId === turnStartLastMsgId) return false;
     const text = collectAgentText(last);
-    if (!text.trim()) return;
+    if (!text.trim()) return false;
     const id = ttsKey(state.currentId, msgId);
     const meta = getTtsMeta();
-    if (meta[id] && !meta[id].temp) return;
+    if (meta[id] && !meta[id].temp) return false; // 已完整播放过，跳过
     speakMessage(state.currentId, msgId, text, true);
+    return true;
   }
 
   function currentLastMsgId() {

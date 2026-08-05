@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '8.3';
+const VERSION = '8.4';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -776,7 +776,9 @@ function wavToMp3(wavBuf) {
   });
 }
 
-async function doTtsGenerate(clean) {
+const ttsRealTimeJobs = new Map(); // jobId -> {ctrl, done}，用于新消息时统一取消实时合成
+
+async function doTtsGenerate(clean, jobInfo) {
   fs.mkdirSync(TTS_DIR, { recursive: true });
   const key = ttsCacheKey(clean);
   const wavFile = path.join(TTS_DIR, key + '.wav');
@@ -786,13 +788,21 @@ async function doTtsGenerate(clean) {
   if (fs.existsSync(wavFile)) {
     wav = fs.readFileSync(wavFile);
   } else {
-    const segs = splitTtsText(clean, config.ttsSegmentChars);
-    if (!segs.length) throw new Error('没有可朗读的文字');
-    const parts = [];
-    for (const seg of segs) {
-      parts.push(await ttsSynthesizeOne(seg));
+    // 走流式接口（带 job_id，可被取消），收完帧拼成 WAV 缓存
+    const frames = [];
+    const r = readTtsStreamFrames(clean, jobInfo.jobId, (frame) => frames.push(frame), () => {});
+    jobInfo.ctrl = r.ctrl;
+    const watchdog = setTimeout(() => {
+      try { r.ctrl.abort(); } catch (_) {}
+    }, 8 * 60 * 1000);
+    try {
+      await r.task;
+    } finally {
+      clearTimeout(watchdog);
+      jobInfo.done = true;
     }
-    wav = concatWavs(parts);
+    if (!frames.length) throw new Error('语音生成失败');
+    wav = concatWavs(frames);
     fs.writeFileSync(wavFile, wav);
     pruneTtsCache();
   }
@@ -813,14 +823,32 @@ function ttsGenerate(text) {
   if (!clean) return Promise.reject(new Error('没有可朗读的文字'));
   const key = ttsCacheKey(clean);
   if (ttsInflight.has(key)) return ttsInflight.get(key);
-  const run = ttsChain.then(() => doTtsGenerate(clean));
+  const jobId = 'rt' + Date.now().toString(36) + '-' + (++ttsStreamSeq);
+  const jobInfo = { jobId, ctrl: null, done: false };
+  ttsRealTimeJobs.set(jobId, jobInfo);
+  const run = ttsChain.then(() => doTtsGenerate(clean, jobInfo));
   ttsInflight.set(key, run);
+  const cleanup = () => {
+    if (ttsRealTimeJobs.get(jobId) === jobInfo) ttsRealTimeJobs.delete(jobId);
+  };
   const settled = run.then(
-    v => { ttsInflight.delete(key); return v; },
-    e => { ttsInflight.delete(key); throw e; }
+    v => { ttsInflight.delete(key); cleanup(); return v; },
+    e => { ttsInflight.delete(key); cleanup(); throw e; }
   );
   ttsChain = settled.catch(() => {});
   return settled;
+}
+
+function cancelRealTimeTts() {
+  for (const [jobId, info] of ttsRealTimeJobs) {
+    if (!info.done) {
+      cancelTtsJob(jobId);
+      if (info.ctrl) {
+        try { info.ctrl.abort(); } catch (_) {}
+      }
+    }
+  }
+  ttsRealTimeJobs.clear();
 }
 
 function pruneTtsCache() {
@@ -1131,6 +1159,7 @@ async function apiDispatch(method, params, clientId) {
       }
     case 'turnStart': {
       cancelPreGen(); // 新消息一到就取消旧语音预生成，清空队列
+      cancelRealTimeTts(); // 同时取消在途的实时分段合成
       const body = params || {};
       const threadId = params.threadId;
       const owner = ownerOfThread(threadId);
