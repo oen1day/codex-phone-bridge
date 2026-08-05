@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private static final String KEY_AUTO_SPEAK = "auto_speak";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "7.6";
+    private static final String APP_VERSION = "7.7";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -558,6 +558,7 @@ public class MainActivity extends Activity {
                             String ghBranch = seg[3];
                             urlList.add("https://cdn.jsdelivr.net/gh/" + ghUser + "/" + ghRepo + "@" + ghBranch + "/version.json");
                             urlList.add("https://github.com/" + ghUser + "/" + ghRepo + "/raw/" + ghBranch + "/version.json");
+                            urlList.add("https://api.github.com/repos/" + ghUser + "/" + ghRepo + "/contents/version.json");
                         }
                     } else if ("github.com".equalsIgnoreCase(host)) {
                         String[] seg = path.split("/");
@@ -567,6 +568,7 @@ public class MainActivity extends Activity {
                             String ghBranch = seg[4];
                             urlList.add("https://raw.githubusercontent.com/" + ghUser + "/" + ghRepo + "/" + ghBranch + "/version.json");
                             urlList.add("https://cdn.jsdelivr.net/gh/" + ghUser + "/" + ghRepo + "@" + ghBranch + "/version.json");
+                            urlList.add("https://api.github.com/repos/" + ghUser + "/" + ghRepo + "/contents/version.json");
                         }
                     }
                 } catch (Exception ignored) {}
@@ -580,6 +582,10 @@ public class MainActivity extends Activity {
                             java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
                             conn.setConnectTimeout(8000);
                             conn.setReadTimeout(8000);
+                            conn.setRequestProperty("User-Agent", "codex-phone-bridge");
+                            if (u.startsWith("https://api.github.com/")) {
+                                conn.setRequestProperty("Accept", "application/vnd.github.raw");
+                            }
                             java.io.InputStream in = conn.getInputStream();
                             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                             byte[] buf = new byte[4096];
