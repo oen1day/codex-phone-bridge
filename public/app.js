@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '9.5';
+  const APP_VERSION = '9.6';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -1913,10 +1913,12 @@
   }
 
   function finishTts(key) {
-    if (ttsActiveKey === key) ttsActiveKey = null;
+    // 兼容刷新后按钮被重绑定过的新 key：始终复位当前活跃会话的按钮
+    const k = ttsActiveKey || key;
+    ttsActiveKey = null;
     ttsActiveState = 'idle';
     ttsActiveText = '';
-    setSpeakBtn(key, 'idle');
+    setSpeakBtn(k, 'idle');
   }
 
   async function tryTtsStatus(text) {

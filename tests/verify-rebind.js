@@ -57,6 +57,7 @@ function check(name, cond) {
 const fnSet = extractFn('setSpeakBtn');
 const fnEnsure = extractFn('ensureTtsBtn');
 const fnRestore = extractFn('restoreSpeakBtnState');
+const fnFinish = extractFn('finishTts');
 
 const newBtn = makeBtn();
 newBtn._speakKey = 'c1_new-id';
@@ -95,6 +96,15 @@ check('状态记录正确', ctx.ttsActiveState === 'playing');
 const restore = evalFn('restoreSpeakBtnState', fnRestore, ctx);
 restore();
 check('恢复函数保持播放中', newBtn.textContent === '⏹ 停止');
+
+// 播放结束：finishTts 用旧 key 调用时，应复位已重绑定的新按钮
+ctx.ttsActiveKey = 'c1_new-id';
+ctx.ttsActiveState = 'playing';
+ctx.ttsActiveText = '新回复内容';
+const finishTts = evalFn('finishTts', fnFinish, ctx);
+finishTts('c1_old-id');
+check('播放结束后按钮回到朗读', newBtn.textContent === '🔊 朗读');
+check('播放结束后会话键清空', ctx.ttsActiveKey === null && ctx.ttsActiveState === 'idle');
 
 console.log('按钮重绑定验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);
