@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '8.5';
+  const APP_VERSION = '8.6';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -1673,7 +1673,18 @@
 
   function setSpeakBtn(key, state) {
     if (key === ttsActiveKey) ttsActiveState = state;
-    const btn = speakButtons.get(key);
+    let btn = speakButtons.get(key);
+    if (!btn && key) {
+      // 按钮注册表可能被刷新清掉但 DOM 还在：从 DOM 找回并重新注册
+      const all = document.querySelectorAll('.speak-btn');
+      for (const b of all) {
+        if (b._speakKey === key) {
+          btn = b;
+          speakButtons.set(key, btn);
+          break;
+        }
+      }
+    }
     if (!btn) return;
     btn.classList.remove('speaking', 'disabled');
     btn.disabled = false;
@@ -1689,7 +1700,7 @@
 
   // 后台刷新重建界面后，恢复当前朗读按钮的状态（防止“声音在播但按钮显示未朗读”）
   function restoreSpeakBtnState() {
-    if (ttsActiveKey && ttsActiveState && ttsActiveState !== 'idle') {
+    if (ttsActiveKey) {
       setSpeakBtn(ttsActiveKey, ttsActiveState);
     }
   }
@@ -1816,10 +1827,13 @@
     }
   }
 
-  function playTtsSegment(blob, session) {
+  function playTtsSegment(key, blob, session) {
     return new Promise((resolve) => {
       if (session !== ttsSession) { resolve(false); return; }
-      setSpeakBtn(ttsActiveKey, 'playing');
+      // 播放前重新认领按钮归属：即使之前被误清，也能恢复“播放中”状态
+      ttsActiveKey = key;
+      ttsActiveState = 'playing';
+      setSpeakBtn(key, 'playing');
       let settled = false;
       const done = (ok) => {
         if (settled) return;
@@ -1938,8 +1952,11 @@
       } catch (_) {}
       if (state.currentId !== convId) break;
       if (auto && !autoSpeak) { idx++; continue; }
-      const played = await playTtsSegment(blob, session);
-      if (!played) break;
+      const played = await playTtsSegment(msgKey, blob, session);
+      if (!played) {
+        if (session === ttsSession) finishTts(msgKey);
+        break;
+      }
       playedAny = true;
       idx++;
     }
@@ -1975,7 +1992,7 @@
     if (st && !st.partial) {
       const blob = b64ToBlob(st.audioB64, st.mime || 'audio/wav');
       if (session !== ttsSession || state.currentId !== convId) return;
-      await playTtsSegment(blob, session);
+      await playTtsSegment(msgKey, blob, session);
       if (session === ttsSession) {
         markTtsPlayed(msgKey);
         finishTts(msgKey);
@@ -1999,8 +2016,11 @@
         setTtsMeta(meta);
       } catch (_) {}
       if (session !== ttsSession || state.currentId !== convId) return;
-      const played = await playTtsSegment(firstBlob, session);
-      if (!played || session !== ttsSession) return;
+      const played = await playTtsSegment(msgKey, firstBlob, session);
+      if (!played || session !== ttsSession) {
+        if (session === ttsSession) finishTts(msgKey);
+        return;
+      }
       if (relayCfg) {
         // 中继模式：剩余部分走整段合成（可靠，不依赖音频流分片）
         const segs = splitTtsSegments(text);
@@ -2050,8 +2070,11 @@
       }
       if (auto && !autoSpeak) continue;
       prefetchTtsSegment(convId, msgId, segs, i, temp);
-      const played = await playTtsSegment(blob, session);
-      if (!played) return;
+      const played = await playTtsSegment(msgKey, blob, session);
+      if (!played) {
+        if (session === ttsSession) finishTts(msgKey);
+        return;
+      }
       playedAny = true;
     }
     if (session === ttsSession) {
@@ -2103,8 +2126,11 @@
       }
       if (auto && !autoSpeak) continue;
       prefetchTtsSegment(convId, msgId, segs, i, temp);
-      const played = await playTtsSegment(blob, session);
-      if (!played) return;
+      const played = await playTtsSegment(msgKey, blob, session);
+      if (!played) {
+        if (session === ttsSession) finishTts(msgKey);
+        return;
+      }
       playedAny = true;
     }
     if (session === ttsSession) {
@@ -2142,6 +2168,8 @@
     const text = collectAgentText(last);
     if (!text.trim()) return false;
     const id = ttsKey(state.currentId, msgId);
+    // 同一消息已在朗读/生成中（会话未变）时不重复触发
+    if (ttsActiveKey === id && ttsSession) return false;
     const meta = getTtsMeta();
     if (meta[id] && !meta[id].temp) return false; // 已完整播放过，跳过
     speakMessage(state.currentId, msgId, text, true);
