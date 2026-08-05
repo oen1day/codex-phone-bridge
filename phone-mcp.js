@@ -56,7 +56,7 @@ async function ensureLogin() {
 const TOOLS = [
   {
     name: 'list_phone_apps',
-    description: '列出手机（Codex 手机遥控 App）上已安装的常用应用，返回名称和包名。这是读取手机应用列表的推荐方式：手机通过无线中继连接，不需要 USB 数据线、不需要 adb、不需要 USB 调试。直接调用本工具即可；不要检查 USB 设备或运行 adb 命令。需要电脑端桥接窗口正在运行、手机 App 已连接中继。',
+    description: '列出手机（鳍点AI App）上已安装的常用应用，返回名称和包名。这是读取手机应用列表的推荐方式：手机通过无线中继连接，不需要 USB 数据线、不需要 adb、不需要 USB 调试。直接调用本工具即可；不要检查 USB 设备或运行 adb 命令。需要电脑端桥接窗口正在运行、手机 App 已连接中继。',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -83,7 +83,7 @@ const TOOLS = [
   },
   {
     name: 'open_phone_app_background',
-    description: '在手机上打开某个应用，但随后自动回到 Codex 助手界面，让目标应用在后台运行。参数 package 是包名。',
+    description: '在手机上打开某个应用，但随后自动回到 鳍点AI界面，让目标应用在后台运行。参数 package 是包名。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -110,7 +110,7 @@ const TOOLS = [
   },
   {
     name: 'request_phone_battery_exemption',
-    description: '打开手机的电池优化设置页，让用户可以把 Codex 助手设为“无限制”，保证后台常驻不被系统杀掉。无需参数。',
+    description: '打开手机的电池优化设置页，让用户可以把 鳍点AI设为“无限制”，保证后台常驻不被系统杀掉。无需参数。',
     inputSchema: { type: 'object', properties: {} }
   }
 ];
@@ -148,7 +148,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '9.8' }
+        serverInfo: { name: 'codex-phone-bridge', version: '9.9' }
       }
     });
     return;

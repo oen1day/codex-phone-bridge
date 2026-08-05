@@ -60,7 +60,7 @@ if (-not (Test-Path $cfgPath)) {
 
 Write-Host ''
 Write-Host '==============================================' -ForegroundColor Cyan
-Write-Host '  Codex 手机遥控' -ForegroundColor Cyan
+Write-Host '  鳍点AI' -ForegroundColor Cyan
 Write-Host "  电脑上打开: http://localhost:$($cfg.port)" -ForegroundColor Green
 if ($ip) {
   Write-Host "  手机上打开: http://$ip`:$($cfg.port)" -ForegroundColor Green

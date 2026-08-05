@@ -44,7 +44,7 @@ if ((Invoke-Gh @('auth', 'status')) -ne 0) {
 # 创建公开仓库（如果不存在）
 if ((Invoke-Gh @('repo', 'view', "$user/$repo")) -ne 0) {
   Write-Host "创建公开仓库 $user/$repo ..."
-  if ((Invoke-Gh @('repo', 'create', "$user/$repo", '--public', '--description', 'Codex 手机遥控更新源')) -ne 0) {
+  if ((Invoke-Gh @('repo', 'create', "$user/$repo", '--public', '--description', '鳍点AI更新源')) -ne 0) {
     throw '创建仓库失败'
   }
 }
@@ -148,7 +148,7 @@ $zipFile = Join-Path $root 'CodexPhoneBridge-PC.zip'
 $apkFile = Join-Path $root 'CodexPhoneBridge.apk'
 if (-not (Test-Path $zipFile)) { throw '生成压缩包失败' }
 if (-not (Test-Path $apkFile)) { throw '找不到 CodexPhoneBridge.apk' }
-if ((Invoke-Gh @('release', 'create', $tag, $zipFile, $apkFile, '--repo', "$user/$repo", '--title', $tag, '--notes', "Codex 手机遥控 v$version")) -ne 0) {
+if ((Invoke-Gh @('release', 'create', $tag, $zipFile, $apkFile, '--repo', "$user/$repo", '--title', $tag, '--notes', "鳍点AI v$version")) -ne 0) {
   Write-Host "Release $tag 已存在，尝试覆盖上传新文件 ..."
   if ((Invoke-Gh @('release', 'upload', $tag, $zipFile, $apkFile, '--repo', "$user/$repo", '--clobber')) -ne 0) {
     throw "发布/覆盖 Release 失败：请到网页删除 $tag 后重试"

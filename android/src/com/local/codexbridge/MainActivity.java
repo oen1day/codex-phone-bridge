@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private static final String KEY_AUTO_SPEAK = "auto_speak";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "9.8";
+    private static final String APP_VERSION = "9.9";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -349,7 +349,7 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.parseColor("#0f1115"));
 
         TextView title = new TextView(this);
-        title.setText("Codex 手机遥控");
+        title.setText("鳍点AI");
         title.setTextColor(Color.WHITE);
         title.setTextSize(22);
         title.setGravity(Gravity.CENTER);
@@ -659,7 +659,7 @@ public class MainActivity extends Activity {
         try {
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
             DownloadManager.Request req = new DownloadManager.Request(Uri.parse(apkUrl));
-            req.setTitle("Codex 手机遥控");
+            req.setTitle("鳍点AI");
             req.setDescription("正在下载新版 APK…");
             req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
             req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "CodexPhoneBridge.apk");

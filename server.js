@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '9.8';
+const VERSION = '9.9';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -304,7 +304,7 @@ async function startClient() {
     await c.call('initialize', {
       clientInfo: {
         name: 'codex_phone_bridge',
-        title: 'Codex 手机遥控',
+        title: '鳍点AI',
         version: '1.0.0'
       },
       capabilities: { experimentalApi: true }
@@ -1697,7 +1697,7 @@ pruneTtsCache();
 server.listen(config.port, '0.0.0.0', () => {
   console.log('');
   console.log('==============================================');
-  console.log('  Codex 手机遥控已启动');
+  console.log('  鳍点AI已启动');
   console.log('  本机访问: http://localhost:' + config.port);
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {

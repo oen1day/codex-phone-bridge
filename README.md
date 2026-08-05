@@ -1,4 +1,4 @@
-# Codex 手机遥控（DeepSeek 版）
+# 鳍点AI（DeepSeek 版）
 
 一个不用登录 ChatGPT 账号、直接用手机控制电脑上 Codex 的小工具。
 模型仍然走你电脑上配置的 DeepSeek 接口，对话、发图片、看结果、批准命令都在手机上完成。

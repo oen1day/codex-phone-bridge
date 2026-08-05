@@ -16,7 +16,7 @@ public class KeepAliveService extends Service {
         super.onCreate();
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "Codex 助手后台服务", NotificationManager.IMPORTANCE_LOW);
+                    CHANNEL_ID, "鳍点AI后台服务", NotificationManager.IMPORTANCE_LOW);
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) nm.createNotificationChannel(ch);
         }
@@ -25,7 +25,7 @@ public class KeepAliveService extends Service {
                 : new Notification.Builder(this);
         Notification n = b
                 .setSmallIcon(getApplicationInfo().icon)
-                .setContentTitle("Codex 助手")
+                .setContentTitle("鳍点AI")
                 .setContentText("正在后台保持连接")
                 .setOngoing(true)
                 .build();
