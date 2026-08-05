@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '5.5';
+  const APP_VERSION = '5.6';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 120;
   const STUCK_TOTAL_SEC = 480;
@@ -260,6 +260,33 @@
 
   function tryRelayBroker(broker) {
     return new Promise((resolve, reject) => {
+      let settled = false;
+      function fail(err) {
+        if (settled) return;
+        settled = true;
+        if (relayChannel === ch) relayChannel = null;
+        try { ch.stop(); } catch (_) {}
+        relayChannelsSet.delete(ch);
+        reject(err);
+      }
+      function pingVia(targetCh) {
+        return new Promise((res, rej) => {
+          const id = ++relayRpcId;
+          const timer = setTimeout(() => {
+            relayPending.delete(id);
+            rej(new Error('配对超时'));
+          }, 8000);
+          relayPending.set(id, {
+            resolve: (r) => { clearTimeout(timer); res(r); },
+            reject: (e) => { clearTimeout(timer); rej(e); }
+          });
+          targetCh.send({ type: 'rpc', id, method: 'ping', params: {}, clientId: targetCh.clientId }).catch(e => {
+            relayPending.delete(id);
+            clearTimeout(timer);
+            rej(e);
+          });
+        });
+      }
       const ch = new RelayChannel({
         broker,
         roomCode: relayCfg.roomCode,
@@ -273,12 +300,19 @@
         },
         onStatus: (s) => {
           if (s === 'connected') {
-            if (!ch._resolved) {
-              ch._resolved = true;
+            if (!ch._connected) {
+              ch._connected = true;
               setStatus('中继已连接');
               showToast('中继已连接');
               addSystemLine('中继已连接 · ' + new Date().toLocaleTimeString());
-              resolve(ch);
+              relayChannel = ch;
+              pingVia(ch).then(() => {
+                if (settled) return;
+                settled = true;
+                resolve(ch);
+              }).catch((e) => {
+                fail(new Error('配对验证失败: ' + ((e && e.message) || e)));
+              });
             } else {
               setStatus('中继已连接');
               addSystemLine('中继已恢复 · ' + new Date().toLocaleTimeString());
@@ -289,21 +323,16 @@
             setStatus(s, true);
             rejectPendingRelay('中继连接断开，正在重连…');
             if (s.indexOf('失败') >= 0) showToast(s, true);
+            if (!ch._connected) fail(new Error(s || '连接失败'));
           }
         }
       });
       relayChannelsSet.add(ch);
       ch.start().catch(e => {
-        try { ch.stop(); } catch (_) {}
-        relayChannelsSet.delete(ch);
-        reject(new Error('无法连接中继服务器: ' + ((e && e.message) || e)));
+        fail(new Error('无法连接中继服务器: ' + ((e && e.message) || e)));
       });
       setTimeout(() => {
-        if (!ch._resolved) {
-          try { ch.stop(); } catch (_) {}
-          relayChannelsSet.delete(ch);
-          reject(new Error('中继连接超时'));
-        }
+        if (!settled) fail(new Error('中继连接超时'));
       }, 15000);
     });
   }
