@@ -23,10 +23,8 @@ public class KeepAliveService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
-        int notifIcon = getResources().getIdentifier("ic_notification", "drawable", getPackageName());
-        if (notifIcon == 0) notifIcon = getApplicationInfo().icon;
         Notification n = b
-                .setSmallIcon(notifIcon)
+                .setSmallIcon(getApplicationInfo().icon)
                 .setContentTitle("鳍点AI")
                 .setContentText("正在后台保持连接")
                 .setOngoing(true)

@@ -44,9 +44,6 @@ check('server.js 有源码暗记', server.includes('作者暗记：add-2026-0805
 const license = fs.existsSync(path.join(root, 'LICENSE')) ? read('LICENSE') : '';
 check('LICENSE 是 GPL-3.0', license.includes('GNU GENERAL PUBLIC LICENSE') && license.includes('Version 3'));
 check('LICENSE 版权行 add', license.includes('Copyright (C) 2026 add'));
-const keepAlive = read('android/src/com/local/codexbridge/KeepAliveService.java');
-check('通知栏图标用新鲨鱼鳍', keepAlive.includes('ic_notification') && fs.existsSync(path.join(root, 'android/res/drawable/ic_notification.png')));
-check('通知图标有兜底', keepAlive.includes('getApplicationInfo().icon'));
 const noPlaceholder = !readme.includes('待补充') && !java.includes('待作者提供') && !license.includes('署名待补充');
 check('无占位符残留', noPlaceholder);
 
