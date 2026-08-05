@@ -28,6 +28,7 @@ function run(agent, override) {
     turnStartLastMsgId: 'old-id',
     ttsActiveKey: null,
     ttsActiveState: 'idle',
+    autoSpokenMsgKey: null,
     metaObj: {},
     getTtsMeta: () => ctx.metaObj,
     ttsKey: (a, b) => a + '_' + b,
@@ -66,6 +67,9 @@ check('同消息播放中 → 跳过', x.r === false);
 
 x = run(makeAgent('new-id', '内容'), { ttsActiveKey: 'c1_new-id', ttsActiveState: 'idle' });
 check('残留key自愈 → 触发', x.r === true && x.spoken && x.ctx.ttsActiveKey === null);
+
+x = run(makeAgent('new-id', '内容'), { autoSpokenMsgKey: 'c1_new-id' });
+check('已自动朗读过 → 跳过不重复', x.r === false && !x.spoken);
 
 console.log('自动朗读验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

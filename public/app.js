@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '9.7';
+  const APP_VERSION = '9.8';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -86,6 +86,8 @@
   const ttsGenerating = new Map();
   let ttsActiveKey = null;
   let ttsActiveState = 'idle';
+  let autoSpokenMsgKey = null;
+  let autoSpeakRetryTimer = null;
   let ttsSession = 0;
   const ttsWaitResolvers = new Set();
   let ttsAudioEl = null;
@@ -900,13 +902,13 @@
       for (const b of state.blocks.values()) b.classList.remove('typing');
       loadThreads();
       const tid = params.turn && params.turn.id;
-      // 先用当前已渲染的回复立即触发自动朗读（流式临时id会等刷新后再触发）
-      let triggered = maybeAutoSpeak();
+      // 立即试一次自动朗读（DOM 已有真实消息 id 时直接触发）
+      triggerAutoSpeak();
       setTimeout(async () => {
         if (state.turnId && state.turnId !== tid) return;
         await refreshThreadNow();
-        if (!triggered) maybeAutoSpeak();
-      }, 0);
+        triggerAutoSpeak();
+      }, 400);
     } else if (method === 'turn/error') {
       stopTurnPolling();
       stopTurnWatchdog();
@@ -1067,6 +1069,7 @@
         stopTurnPolling();
         return;
       }
+      const convAtRead = state.currentId;
       try {
         const data = await apiCall('threadReadPage', { threadId: state.currentId, limit: 10 });
         const thread = data.thread || {};
@@ -1082,10 +1085,13 @@
         const turnDone = threadIdle || (target.status && target.status !== 'inProgress');
         if (!turnDone) return;
         stopTurnPolling();
+        if (state.currentId !== convAtRead) return;
         const doneId = target.id;
         if (!replySeen[doneId]) {
           replySeen[doneId] = true;
           refreshThreadFromData(thread);
+          // 事件丢失时由轮询兜底：刷新完成同样触发自动朗读
+          triggerAutoSpeak();
         }
       } catch (_) {}
     }, 1800);
@@ -2166,6 +2172,8 @@
     playStreamMessage(convId, msgId, text, auto, false);
   }
 
+  // 自动朗读（自动点击）：只在“当前回合确实有新的 agent 回复”时触发一次。
+  // 事件路径和轮询兜底都会调用，靠 autoSpokenMsgKey 去重，避免双触发/漏触发。
   function maybeAutoSpeak() {
     if (!state.currentId) return false;
     if (!autoSpeak) {
@@ -2176,19 +2184,44 @@
     const last = agents[agents.length - 1];
     if (!last) return false;
     const msgId = last.dataset.msgId;
-    if (!msgId || msgId === turnStartLastMsgId) return false;
-    if (String(msgId).indexOf('live-') === 0) return false; // 流式临时id，等刷新后的真实id再触发
+    if (!msgId) return false;
+    if (String(msgId).indexOf('live-') === 0) return false; // 流式临时 id，等刷新后的真实 id
+    if (msgId === turnStartLastMsgId) return false; // 本轮没有新回复，不重读旧消息
     const text = collectAgentText(last);
     if (!text.trim()) return false;
     const id = ttsKey(state.currentId, msgId);
+    if (id === autoSpokenMsgKey) return false; // 这条已自动朗读过，避免重复触发
     // 自愈：空闲状态下清掉残留的归属键，避免误拦新消息
     if (ttsActiveKey && ttsActiveState === 'idle') ttsActiveKey = null;
     // 只拦“同一消息确实正在生成/播放中”的重复触发
     if (ttsActiveKey === id && ttsActiveState !== 'idle') return false;
     const meta = getTtsMeta();
-    if (meta[id] && !meta[id].temp) return false;
+    if (meta[id] && !meta[id].temp) return false; // 已完整播完过，手动重听即可
+    autoSpokenMsgKey = id;
     speakMessage(state.currentId, msgId, text, true);
     return true;
+  }
+
+  // 自动朗读入口：立即试一次；若 DOM 还没有真实消息 id，定时补试几次，
+  // 期间若用户切换对话则放弃，避免误读别的对话。
+  function triggerAutoSpeak() {
+    const convId = state.currentId;
+    if (!convId) return;
+    if (maybeAutoSpeak()) return;
+    clearTimeout(autoSpeakRetryTimer);
+    let n = 0;
+    const retry = () => {
+      n++;
+      if (n > 3) return;
+      autoSpeakRetryTimer = setTimeout(async () => {
+        if (!state.currentId || state.currentId !== convId) return;
+        if (maybeAutoSpeak()) return;
+        if (n >= 2) await refreshThreadNow(); // 刷新补真实 id
+        if (maybeAutoSpeak()) return;
+        retry();
+      }, 600 * n);
+    };
+    retry();
   }
 
   function currentLastMsgId() {
