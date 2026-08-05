@@ -29,6 +29,7 @@ check('app 发送前检查连接', app.includes("!(relayChannel && relayChannel.
 check('app 业务错误带 business 标记', app.includes('business: !!(e && e.business)'));
 check('MCP 透传业务错误', mcp.includes('result.ok === false && result.error'));
 check('start.ps1 自动重启', start.includes('$restartLeft') && start.includes('服务异常退出'));
+check('空线程无 rollout 按空对话返回', server.includes('no rollout|not materialized') && server.includes("status: { type: 'idle' }"));
 
 console.log('崩溃兜底验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

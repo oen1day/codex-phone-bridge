@@ -1078,12 +1078,16 @@ async function readThreadTurns(threadId) {
     if (/includeTurns/i.test(emsg) && !/not materialized|thread not found/i.test(emsg)) {
       return await c.call('thread/read', { threadId, includeTurns: false });
     }
-    if (/not materialized|thread not found/i.test(emsg)) {
+    if (/not materialized|thread not found|no rollout/i.test(emsg)) {
       console.log('[codex] 线程未加载，正在恢复线程: ' + threadId);
       try {
         await c.call('thread/resume', { threadId });
       } catch (e2) {
         console.error('[codex] 恢复线程失败: ' + (e2 && e2.message));
+        // 刚创建的空线程没有 rollout 文件是正常现象，按空对话返回，不再报错
+        if (/no rollout|not materialized/i.test((e2 && e2.message) || '')) {
+          return { thread: { id: threadId, title: '', status: { type: 'idle' }, turns: [] } };
+        }
       }
       try {
         return await c.call('thread/read', { threadId, includeTurns: true });
@@ -1091,6 +1095,9 @@ async function readThreadTurns(threadId) {
         const emsg3 = (e3 && e3.message) || '';
         if (/includeTurns/i.test(emsg3)) {
           return await c.call('thread/read', { threadId, includeTurns: false });
+        }
+        if (/no rollout|not materialized/i.test(emsg3)) {
+          return { thread: { id: threadId, title: '', status: { type: 'idle' }, turns: [] } };
         }
         throw new Error('读取对话失败，请稍后重试（' + emsg3 + '）');
       }
