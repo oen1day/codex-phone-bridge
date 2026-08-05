@@ -59,7 +59,7 @@ function loadConfig() {
   const docs = process.env.USERPROFILE
     ? path.join(process.env.USERPROFILE, 'Documents', 'Codex')
     : ROOT;
-  return Object.assign({
+  const merged = Object.assign({
     port: 8787,
     password: '',
     workspace: docs,
@@ -75,6 +75,10 @@ function loadConfig() {
     relayRoomCode: '',
     shareKey: ''
   }, cfg);
+  if (!merged.workspace) merged.workspace = docs;
+  if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
+  if (!merged.relayBroker) merged.relayBroker = 'wss://broker.emqx.io:8084/mqtt';
+  return merged;
 }
 
 const config = loadConfig();
