@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.Context;
 import android.content.BroadcastReceiver;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
@@ -70,7 +71,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_DEVICE_STATUS = "cap_device_status";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.6";
+    private static final String APP_VERSION = "10.7";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -620,6 +621,12 @@ public class MainActivity extends Activity {
                     Toast.makeText(MainActivity.this, "请输入电脑地址", Toast.LENGTH_SHORT).show();
                     return;
                 }
+                String lowerUrl = url.toLowerCase();
+                if ("lan".equals(mode[0]) && (lowerUrl.startsWith("localhost") || lowerUrl.startsWith("127.0.0.1")
+                        || lowerUrl.indexOf("://localhost") >= 0 || lowerUrl.indexOf("://127.0.0.1") >= 0)) {
+                    Toast.makeText(MainActivity.this, "请填电脑的局域网 IP，例如 http://192.168.1.100:8787", Toast.LENGTH_LONG).show();
+                    return;
+                }
                 if ("relay".equals(mode[0])) {
                     if (room.isEmpty() || pw.isEmpty()) {
                         Toast.makeText(MainActivity.this, "请输入配对码和密码", Toast.LENGTH_SHORT).show();
@@ -838,14 +845,37 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(true);
         s.setMediaPlaybackRequiresUserGesture(false);
-        if ("relay".equals(mode)) {
-            web.addJavascriptInterface(new JsBridge(), "AndroidBridge");
-        }
+        web.addJavascriptInterface(new JsBridge(), "AndroidBridge");
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 view.loadUrl(url);
                 return true;
+            }
+            @Override
+            public void onReceivedError(WebView view, android.webkit.WebResourceRequest request, android.webkit.WebResourceError error) {
+                if (request == null || !request.isForMainFrame()) return;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        try {
+                            AlertDialog.Builder b = new AlertDialog.Builder(MainActivity.this);
+                            b.setTitle("无法连接到该地址");
+                            b.setMessage("请检查：\n\n1. 电脑端桥接服务是否已启动（start.bat）；\n2. 地址是否为电脑的局域网 IP（localhost 指向的是手机自己）；\n3. 手机和电脑是否连接同一个 Wi-Fi。");
+                            b.setPositiveButton("重新修改设置", new DialogInterface.OnClickListener() {
+                                @Override public void onClick(DialogInterface d, int which) {
+                                    showSettingsDialog();
+                                }
+                            });
+                            b.setNegativeButton("重试", new DialogInterface.OnClickListener() {
+                                @Override public void onClick(DialogInterface d, int which) {
+                                    try { if (web != null) web.reload(); } catch (Exception ignored) {}
+                                }
+                            });
+                            b.setCancelable(true);
+                            b.show();
+                        } catch (Exception ignored) {}
+                    }
+                });
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
