@@ -87,7 +87,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '7.4';
+const VERSION = '7.5';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -700,6 +700,55 @@ function pruneTtsCache() {
   } catch (_) {}
 }
 
+// ---------- 语音流式转发（/tts/stream -> 手机） ----------
+const ttsStreams = new Map();
+let ttsStreamSeq = 0;
+
+function broadcastTts(obj) {
+  for (const ch of relayChannels) {
+    if (ch && ch.ready) ch.send(obj).catch(() => {});
+  }
+}
+
+function readTtsStreamFrames(text, onFrame, onEnd) {
+  const base = String(config.ttsUrl || 'http://127.0.0.1:8866').replace(/\/+$/, '');
+  const ctrl = new AbortController();
+  const task = (async () => {
+    const res = await fetch(base + '/tts/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: String(text || ''),
+        emotion: config.ttsEmotion || '平静日常',
+        emo_alpha: 1.0,
+        use_random: false
+      }),
+      signal: ctrl.signal
+    });
+    if (!res.ok || !res.body) throw new Error('语音流服务返回 ' + res.status);
+    const reader = res.body.getReader();
+    let buf = Buffer.alloc(0);
+    let n = 0;
+    while (true) {
+      const r = await reader.read();
+      if (r.done) break;
+      buf = Buffer.concat([buf, Buffer.from(r.value)]);
+      while (buf.length >= 4) {
+        const len = buf.readUInt32LE(0);
+        if (len === 0) throw new Error('语音流异常终止');
+        if (buf.length < 4 + len) break;
+        const frame = buf.subarray(4, 4 + len);
+        buf = buf.subarray(4 + len);
+        n++;
+        onFrame(frame, n);
+      }
+    }
+    if (n === 0) throw new Error('语音流没有内容');
+    onEnd(n);
+  })();
+  return { ctrl, task };
+}
+
 async function apiDispatch(method, params, clientId) {
   const c = await getClient();
   switch (method) {
@@ -868,6 +917,46 @@ async function apiDispatch(method, params, clientId) {
     case 'ttsGenerate': {
       const buf = await ttsGenerate(params.text);
       return { ok: true, mime: 'audio/wav', audioB64: buf.toString('base64') };
+    }
+    case 'ttsStreamStart': {
+      const text = String(params.text || '').replace(/\s+/g, ' ').trim();
+      if (!text) throw new Error('没有可朗读的文字');
+      const sid = 'ts' + Date.now().toString(36) + '-' + (++ttsStreamSeq);
+      const entry = { timer: null, ctrl: null, done: false };
+      ttsStreams.set(sid, entry);
+      const finish = (ok, error) => {
+        if (entry.done) return;
+        entry.done = true;
+        if (entry.timer) clearTimeout(entry.timer);
+        ttsStreams.delete(sid);
+        broadcastTts({ type: 'tts-stream-end', id: sid, ok, error: error || '', to: clientId });
+      };
+      (async () => {
+        try {
+          const r = readTtsStreamFrames(text, (frame, seq) => {
+            broadcastTts({ type: 'tts-stream', id: sid, seq, b64: frame.toString('base64'), to: clientId });
+          }, () => finish(true, ''));
+          entry.ctrl = r.ctrl;
+          entry.timer = setTimeout(() => {
+            try { entry.ctrl && entry.ctrl.abort(); } catch (_) {}
+            finish(false, '语音生成超时');
+          }, 12 * 60 * 1000);
+          await r.task;
+        } catch (e) {
+          finish(false, (e && e.message) || '语音流失败');
+        }
+      })();
+      return { ok: true, id: sid };
+    }
+    case 'ttsStreamStop': {
+      const entry = ttsStreams.get(params.id);
+      if (entry) {
+        entry.done = true;
+        if (entry.timer) clearTimeout(entry.timer);
+        try { entry.ctrl && entry.ctrl.abort(); } catch (_) {}
+        ttsStreams.delete(params.id);
+      }
+      return { ok: true };
     }
     case 'phoneApps':
       return phoneRpc('listApps', {}, 30000);
@@ -1109,6 +1198,21 @@ async function handleApi(req, res, url) {
       const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
       const buf = await ttsGenerate(body.text);
       sendJson(res, 200, { ok: true, mime: 'audio/wav', audioB64: buf.toString('base64') });
+      return;
+    }
+    if (p === '/api/tts/stream' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-cache' });
+      try {
+        const r = readTtsStreamFrames(
+          body.text,
+          (frame) => { try { res.write(frame); } catch (_) {} },
+          () => { try { res.end(); } catch (_) {} }
+        );
+        await r.task;
+      } catch (e) {
+        try { res.end(); } catch (_) {}
+      }
       return;
     }
     if (p === '/api/phone/apps' && req.method === 'POST') {

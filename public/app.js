@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '7.4';
+  const APP_VERSION = '7.5';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -87,6 +87,8 @@
   const ttsWaitResolvers = new Set();
   let ttsAudioEl = null;
   let ttsBlobUrl = null;
+  let ttsStreamState = null;
+  let ttsLanReader = null;
   const replySeen = {};
 
   // ---------- 通信层（局域网 / 中继） ----------
@@ -177,6 +179,16 @@
         if (msg.ok) p.resolve(msg.result);
         else p.reject(new Error(msg.error || '请求失败'));
       }
+      return;
+    }
+    if (msg.type === 'tts-stream') {
+      if (msg.to && relayChannel && msg.to !== relayChannel.clientId) return;
+      ttsStreamPush({ id: msg.id, b64: msg.b64 });
+      return;
+    }
+    if (msg.type === 'tts-stream-end') {
+      if (msg.to && relayChannel && msg.to !== relayChannel.clientId) return;
+      ttsStreamPush({ id: msg.id, end: true, ok: msg.ok, error: msg.error });
       return;
     }
     if (msg.type === 'event' && msg.payload) {
@@ -1656,6 +1668,17 @@
     ttsSession++;
     const k = ttsActiveKey;
     ttsActiveKey = null;
+    if (ttsLanReader) {
+      try { ttsLanReader.cancel(); } catch (_) {}
+      ttsLanReader = null;
+    }
+    if (relayCfg && ttsStreamState && ttsStreamState.sid) {
+      const sid = ttsStreamState.sid;
+      ttsStreamState = null;
+      apiCall('ttsStreamStop', { id: sid }, 10000).catch(() => {});
+    } else {
+      ttsStreamState = null;
+    }
     if (ttsAudioEl) {
       try { ttsAudioEl.pause(); ttsAudioEl.onended = null; ttsAudioEl.onerror = null; } catch (_) {}
     }
@@ -1668,6 +1691,69 @@
     }
     ttsWaitResolvers.clear();
     if (k) setSpeakBtn(k, 'idle');
+  }
+
+  // ---------- 流式朗读（服务端 /tts/stream -> 手机边收边播） ----------
+  function bytesToBase64(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(s);
+  }
+
+  function ttsStreamPush(frame) {
+    const s = ttsStreamState;
+    if (!s || frame.id !== s.sid) return;
+    if (frame.end) {
+      s.ended = true;
+      s.ok = !!frame.ok;
+      s.error = frame.error || '';
+    } else {
+      s.chunks.push(frame.b64);
+    }
+    while (s.resolvers.length && (s.chunks.length || s.ended)) {
+      const r = s.resolvers.shift();
+      if (s.chunks.length) r({ b64: s.chunks.shift() });
+      else r({ end: true, ok: s.ok, error: s.error });
+    }
+  }
+
+  function nextTtsFrame(sid, session) {
+    return new Promise((resolve) => {
+      const s = ttsStreamState;
+      if (!s || s.sid !== sid || session !== ttsSession) { resolve(null); return; }
+      if (s.chunks.length) { resolve({ b64: s.chunks.shift() }); return; }
+      if (s.ended) { resolve({ end: true, ok: s.ok, error: s.error }); return; }
+      s.resolvers.push(resolve);
+    });
+  }
+
+  async function consumeLanTtsStream(res, sid, session) {
+    try {
+      const reader = res.body.getReader();
+      ttsLanReader = reader;
+      let buf = new Uint8Array(0);
+      while (true) {
+        const r = await reader.read();
+        if (r.done) break;
+        const value = new Uint8Array(r.value);
+        const merged = new Uint8Array(buf.length + value.length);
+        merged.set(buf, 0);
+        merged.set(value, buf.length);
+        buf = merged;
+        while (buf.length >= 4) {
+          const len = (buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24)) >>> 0;
+          if (buf.length < 4 + len) break;
+          const frame = buf.slice(4, 4 + len);
+          buf = buf.slice(4 + len);
+          if (len > 0) ttsStreamPush({ id: sid, b64: bytesToBase64(frame) });
+        }
+      }
+      ttsStreamPush({ id: sid, end: true, ok: true });
+    } catch (e) {
+      ttsStreamPush({ id: sid, end: true, ok: false, error: (e && e.message) || '连接中断' });
+    }
   }
 
   function playTtsSegment(blob, session) {
@@ -1707,6 +1793,95 @@
   function finishTts(key) {
     if (ttsActiveKey === key) ttsActiveKey = null;
     setSpeakBtn(key, 'idle');
+  }
+
+  async function playStreamMessage(convId, msgId, text, auto, temp) {
+    if (!convId || !msgId || !text || !text.trim()) return;
+    const msgKey = ttsKey(convId, msgId);
+    const meta0 = getTtsMeta();
+    if (meta0[msgKey] && (meta0[msgKey].segs || 0) > 0) {
+      // 已有缓存的音频，直接播放缓存，不再重新合成
+      playMessageSegments(convId, msgId, text, auto, !!meta0[msgKey].temp);
+      return;
+    }
+    stopSpeaking();
+    const session = ++ttsSession;
+    ttsActiveKey = msgKey;
+    const clean = cleanTtsText(text);
+    if (!clean) {
+      finishTts(msgKey);
+      showToast('这条消息没有可朗读的文字', true);
+      return;
+    }
+    setSpeakBtn(msgKey, 'loading');
+    showToast('正在生成语音…');
+    const sid = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    ttsStreamState = { sid, session, chunks: [], ended: false, ok: false, error: '', resolvers: [] };
+    ttsLanReader = null;
+    try {
+      if (relayCfg) {
+        await apiCall('ttsStreamStart', { text: clean }, 20000);
+      } else {
+        const res = await fetch('/api/tts/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: clean })
+        });
+        if (!res.ok || !res.body) throw new Error('语音流服务返回 ' + res.status);
+        consumeLanTtsStream(res, sid, session);
+      }
+    } catch (e) {
+      // 流式不可用，退回分段合成
+      ttsStreamState = null;
+      if (session !== ttsSession) return;
+      playMessageSegments(convId, msgId, text, auto, temp);
+      return;
+    }
+    let idx = 0;
+    while (true) {
+      if (session !== ttsSession) break;
+      const frame = await nextTtsFrame(sid, session);
+      if (!frame) break;
+      if (frame.end) {
+        if (!frame.ok && idx === 0) {
+          // 一段都没生成出来，退回分段合成
+          if (session === ttsSession) {
+            ttsStreamState = null;
+            playMessageSegments(convId, msgId, text, auto, temp);
+          }
+          return;
+        }
+        if (!frame.ok) {
+          if (session === ttsSession) {
+            finishTts(msgKey);
+            showToast('朗读中断: ' + (frame.error || '语音流错误'), true);
+          }
+          return;
+        }
+        break;
+      }
+      const blob = b64ToBlob(frame.b64, 'audio/wav');
+      try {
+        await ttsSaveBlob(ttsSegKey(msgKey, idx), blob);
+        const meta = getTtsMeta();
+        const prev = meta[msgKey] || {};
+        meta[msgKey] = {
+          convId: String(convId),
+          msgId: String(msgId),
+          ts: Date.now(),
+          temp: !!temp,
+          segs: idx + 1
+        };
+        setTtsMeta(meta);
+        cleanupTts();
+      } catch (_) {}
+      if (state.currentId !== convId) break;
+      if (auto && !autoSpeak) { idx++; continue; }
+      const played = await playTtsSegment(blob, session);
+      if (!played) break;
+      idx++;
+    }
+    if (session === ttsSession) finishTts(msgKey);
   }
 
   async function playMessageSegments(convId, msgId, text, auto, temp) {
@@ -1758,12 +1933,12 @@
     const meta = getTtsMeta();
     const rec = meta[msgKey];
     const temp = !rec || rec.temp;
-    playMessageSegments(convId, msgId, text, false, temp);
+    playStreamMessage(convId, msgId, text, false, temp);
   }
 
   function speakMessage(convId, msgId, text, auto) {
     if (!convId || !msgId || !text || !text.trim()) return;
-    playMessageSegments(convId, msgId, text, auto, false);
+    playStreamMessage(convId, msgId, text, auto, false);
   }
 
   function maybeAutoSpeak() {
