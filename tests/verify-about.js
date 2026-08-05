@@ -26,11 +26,17 @@ check('MainActivity 有关于页', java.includes('private void showAboutDialog()
 check('MainActivity 有隐藏彩蛋', java.includes('private void showHiddenDialog()'));
 check('彩蛋长按 3 秒', java.includes('postDelayed(openHidden, 3000)'));
 check('彩蛋单点不误触', java.includes('removeCallbacks(openHidden)'));
+check('彩蛋署名 add', java.includes('作者署名：add'));
 check('关于页有开源链接', java.includes('github.com/oen1day/codex-phone-bridge'));
 check('README 有寄语', readme.includes(quote));
-check('README 有版权行', readme.includes('保留所有权利'));
-check('server.js 有源码暗记', server.includes('作者暗记：鳍点-2026-0805-A1'));
-check('LICENSE 存在且禁止商用', fs.existsSync(path.join(root, 'LICENSE')) && read('LICENSE').includes('禁止将本软件'));
+check('README 版权行 add', readme.includes('© 2026 add'));
+check('README 有 GPL 说明', readme.includes('GPL-3.0'));
+check('server.js 有源码暗记', server.includes('作者暗记：add-2026-0805-A1'));
+const license = fs.existsSync(path.join(root, 'LICENSE')) ? read('LICENSE') : '';
+check('LICENSE 是 GPL-3.0', license.includes('GNU GENERAL PUBLIC LICENSE') && license.includes('Version 3'));
+check('LICENSE 版权行 add', license.includes('Copyright (C) 2026 add'));
+const noPlaceholder = !readme.includes('待补充') && !java.includes('待作者提供') && !license.includes('署名待补充');
+check('无占位符残留', noPlaceholder);
 
 console.log('关于页与暗记验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

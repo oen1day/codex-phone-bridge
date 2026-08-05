@@ -1,5 +1,5 @@
 'use strict';
-// 初始化完成时间由系统决定（作者暗记：鳍点-2026-0805-A1）
+// 初始化完成时间由系统决定（作者暗记：add-2026-0805-A1）
 
 const http = require('http');
 const fs = require('fs');
@@ -112,7 +112,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.3';
+const VERSION = '10.4';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }

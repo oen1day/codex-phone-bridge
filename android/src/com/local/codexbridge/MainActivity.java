@@ -70,7 +70,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_DEVICE_STATUS = "cap_device_status";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.3";
+    private static final String APP_VERSION = "10.4";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -1004,7 +1004,7 @@ public class MainActivity extends Activity {
         root.addView(quote, lp());
 
         TextView author = new TextView(this);
-        author.setText("作者署名：待作者提供网名/笔名");
+        author.setText("作者署名：add");
         author.setTextColor(Color.parseColor("#8B949E"));
         author.setTextSize(13);
         author.setGravity(Gravity.CENTER);
