@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private static final String KEY_AUTO_SPEAK = "auto_speak";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "7.7";
+    private static final String APP_VERSION = "7.8";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -556,9 +556,9 @@ public class MainActivity extends Activity {
                             String ghUser = seg[1];
                             String ghRepo = seg[2];
                             String ghBranch = seg[3];
+                            urlList.add("https://api.github.com/repos/" + ghUser + "/" + ghRepo + "/contents/version.json");
                             urlList.add("https://cdn.jsdelivr.net/gh/" + ghUser + "/" + ghRepo + "@" + ghBranch + "/version.json");
                             urlList.add("https://github.com/" + ghUser + "/" + ghRepo + "/raw/" + ghBranch + "/version.json");
-                            urlList.add("https://api.github.com/repos/" + ghUser + "/" + ghRepo + "/contents/version.json");
                         }
                     } else if ("github.com".equalsIgnoreCase(host)) {
                         String[] seg = path.split("/");
@@ -566,14 +566,15 @@ public class MainActivity extends Activity {
                             String ghUser = seg[1];
                             String ghRepo = seg[2];
                             String ghBranch = seg[4];
+                            urlList.add("https://api.github.com/repos/" + ghUser + "/" + ghRepo + "/contents/version.json");
                             urlList.add("https://raw.githubusercontent.com/" + ghUser + "/" + ghRepo + "/" + ghBranch + "/version.json");
                             urlList.add("https://cdn.jsdelivr.net/gh/" + ghUser + "/" + ghRepo + "@" + ghBranch + "/version.json");
-                            urlList.add("https://api.github.com/repos/" + ghUser + "/" + ghRepo + "/contents/version.json");
                         }
                     }
                 } catch (Exception ignored) {}
                 final String[] urls = urlList.toArray(new String[0]);
                 String lastErr = "";
+                String staleMsg = "";
                 try {
                     boolean ok = false;
                     for (String u : urls) {
@@ -604,7 +605,9 @@ public class MainActivity extends Activity {
                             } else if (cmp > 0) {
                                 msg = "发现新版本 v" + v;
                             } else {
-                                msg = "已是最新版本 v" + APP_VERSION + "（服务器版本较旧 v" + v + "）";
+                                staleMsg = "已是最新版本 v" + APP_VERSION + "（服务器版本较旧 v" + v + "）";
+                                lastErr = "";
+                                continue;
                             }
                             ok = true;
                             break;
@@ -612,7 +615,13 @@ public class MainActivity extends Activity {
                             lastErr = (e.getMessage() == null) ? "" : e.getMessage();
                         }
                     }
-                    if (!ok) throw new Exception(lastErr.isEmpty() ? "网络不可达" : lastErr);
+                    if (!ok) {
+                        if (!staleMsg.isEmpty()) {
+                            msg = staleMsg;
+                        } else {
+                            throw new Exception(lastErr.isEmpty() ? "网络不可达" : lastErr);
+                        }
+                    }
                 } catch (Exception e) {
                     msg = "检查失败: " + e.getMessage() + "（请检查网络，或开启 VPN/代理后重试）";
                 }
