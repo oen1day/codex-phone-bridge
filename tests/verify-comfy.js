@@ -86,8 +86,14 @@ check('style 图片占位与失败样式', css.includes('.img-fail-note') && css
 check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - rec.startTs)'));
 check('多卡片队列', app.includes('comfyCards') && app.includes('排队中') && app.includes('promoteNextComfyCard'));
 check('纸张堆叠容器', app.includes('comfyStackEl') && app.includes('ensureComfyStack') && app.includes('reflowComfyStack') && css.includes('.comfy-stack'));
-check('堆叠层叠偏移与淡出', app.includes("left = (i * 8) + 'px'") && app.includes("rec.card.style.opacity = '0'") && app.includes('setTimeout(finishRemove, 600)'));
+check('堆叠层叠偏移与淡出', app.includes("left = (i * 8) + 'px'") && app.includes("rec.card.style.opacity = '0'") && app.includes('setTimeout(finishRemove, 560)'));
 check('下层半透明隐藏徽标', app.includes("'0.45'") && app.includes("badge.style.display = isTop ? '' : 'none'"));
+check('预创建：解析数量词', app.includes('function parseImageCount(') && app.includes('两|二|三|四') && app.includes('Math.min(n, 9)') && app.includes("state: i === 0 ? 'generating' : 'queued'"));
+check('预创建：发送时立即建叠', app.includes('parseImageCount(sendText)') && app.includes("if (preCount >= 2) precreateComfyStack(preCount)"));
+check('预创建池绑定', app.includes('function bindComfyCard(') && app.includes('!rec.bound') && app.includes('function comfyFind('));
+check('抽走/上浮连续动效', app.includes("translate(10px, -10px) scale(0.98)") && app.includes("translate(0, 6px) scale(0.97)") && app.includes('next.rising = true') && app.includes('rec.card.style.zIndex = isTop ? String(recs.length + 1)'));
+check('回合结束清理残留卡', app.includes('function clearComfyCards()') && app.includes('clearComfyCards(); // 回合结束'));
+check('工具兜底仅在无卡时建卡', app.includes("comfyCards.size === 0) startComfyProgress('tool-'"));
 check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
 check('app 内置全屏查看器', app.includes('openImageViewerOverlay') && app.includes('viewerScale') && app.includes("('ontouchstart' in window)"));
 check('style 有查看器遮罩', css.includes('.viewer-overlay') && css.includes('touch-action: none'));
