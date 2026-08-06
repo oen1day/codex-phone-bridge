@@ -104,7 +104,7 @@ function loadConfig() {
     ttsUrl: 'http://127.0.0.1:8866',
     ttsEmotion: '平静日常',
     ttsSegmentChars: 150,
-    ttsTimeoutMs: 300000,
+    ttsTimeoutMs: 90000,
     comfyUrl: 'http://127.0.0.1:8188',
     comfyWorkflows: '',
     comfyInputDir: '',
@@ -131,7 +131,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.26';
+const VERSION = '10.27';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -834,7 +834,13 @@ async function ttsSynthesizeOne(seg) {
       }),
       signal: ctrl.signal
     });
-    if (!r.ok) throw new Error('语音服务返回 ' + r.status);
+    if (!r.ok) {
+      let detail = '';
+      try { const j = await r.json(); detail = (j && j.detail) || ''; } catch (_) {}
+      if (r.status === 409) throw new Error('语音服务繁忙，请稍后重试');
+      if (r.status === 504) throw new Error('语音生成超时');
+      throw new Error('语音服务返回 ' + r.status + (detail ? '：' + detail : ''));
+    }
     const data = await r.json();
     if (!data || !data.url) throw new Error('语音服务响应异常');
     const audioPath = String(data.url).replace(/^\/+/, '');
@@ -1120,7 +1126,13 @@ function readTtsStreamFrames(text, jobId, onFrame, onEnd) {
       }),
       signal: ctrl.signal
     });
-    if (!res.ok || !res.body) throw new Error('语音流服务返回 ' + res.status);
+    if (!res.ok || !res.body) {
+      let detail = '';
+      try { const j = await res.json(); detail = (j && j.detail) || ''; } catch (_) {}
+      if (res.status === 409) throw new Error('语音服务繁忙，请稍后重试');
+      if (res.status === 504) throw new Error('语音生成超时');
+      throw new Error('语音流服务返回 ' + res.status + (detail ? '：' + detail : ''));
+    }
     const reader = res.body.getReader();
     let buf = Buffer.alloc(0);
     let n = 0;
@@ -1778,7 +1790,7 @@ async function apiDispatch(method, params, clientId) {
             cancelTtsJob(sid);
             try { entry.ctrl && entry.ctrl.abort(); } catch (_) {}
             finish(false, '语音生成超时');
-          }, 12 * 60 * 1000);
+          }, 90 * 1000);
           await r.task;
         } catch (e) {
           finish(false, (e && e.message) || '语音流失败');
@@ -2076,8 +2088,15 @@ async function handleApi(req, res, url) {
     }
     if (p === '/api/tts' && req.method === 'POST') {
       const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
-      const r = await ttsGenerate(body.text);
-      sendJson(res, 200, { ok: true, mime: r.mime, audioB64: r.buf.toString('base64') });
+      cancelPreGen(); // 网页朗读同样是实时请求，优先于预生成
+      ttsRealTimeBusy = true;
+      try {
+        const r = await ttsGenerate(body.text);
+        sendJson(res, 200, { ok: true, mime: r.mime, audioB64: r.buf.toString('base64') });
+      } finally {
+        ttsRealTimeBusy = false;
+        processPreGenQueue();
+      }
       return;
     }
     if (p === '/api/tts/stream' && req.method === 'POST') {

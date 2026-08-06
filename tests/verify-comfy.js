@@ -115,6 +115,9 @@ check('server 有 turn 看门狗 90 秒', server.includes('turn/failed') && serv
 check('server 事件循环看门狗', server.includes('lastHeartbeatAt') && server.includes('gap > 30000') && server.includes('process.exit(1)'));
 check('server idle 诊断日志', server.includes('[idle] turn') && server.includes('lastCodexOutputAt') && server.includes('30000'));
 check('前端自动重启恢复', app.includes('function startAutoRecovery()') && app.includes('电脑端无响应，正在自动重启') && app.includes('function handleUnresponsive(') && app.includes("fetch('/api/health', { cache: 'no-store', signal: ctl.signal })"));
+check('TTS 超时缩至 90 秒', server.includes('ttsTimeoutMs: 90000') && server.includes('90 * 1000') && !server.includes('12 * 60 * 1000'));
+check('TTS 繁忙/超时错误翻译', server.includes('语音服务繁忙，请稍后重试') && server.includes('语音生成超时') && server.includes('r.status === 409') && server.includes('r.status === 504'));
+check('网页朗读实时优先', server.includes("cancelPreGen(); // 网页朗读同样是实时请求"));
 check('前端全链路重连', app.includes('function reconnectAll()') && app.includes('reconnectThreadBtn'));
 check('Java 有图片查看器', java.includes('openImageViewer') && java.includes('LocalFileProvider.AUTHORITY'));
 check('Manifest 注册本地 Provider', read('android/AndroidManifest.xml').includes('LocalFileProvider'));
