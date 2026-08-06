@@ -73,6 +73,7 @@ check('Java 有保存到相册方法', java.includes('saveImageToGallery') && ja
 check('Java 有 App 内缓存方法', java.includes('cacheImageToApp') && java.includes('files.length > 10'));
 check('Manifest 有低版本存储权限', read('android/AndroidManifest.xml').includes('WRITE_EXTERNAL_STORAGE'));
 const css = read('public/style.css');
+const html = read('public/index.html');
 check('占位卡固定高度 180px', app.includes('width="320" height="200"') && css.includes('height: 180px'));
 check('卡片内联样式兜底', app.includes('min-height:180px;') && app.includes("ph.style.cssText"));
 check('图片描述标签替代感叹号', app.includes('agent-img-tag') && app.includes("replace(/^!/, '')"));
@@ -125,6 +126,17 @@ check('Manifest 注册本地 Provider', read('android/AndroidManifest.xml').incl
 check('LocalFileProvider 文件存在', fs.existsSync(path.join(root, 'android/src/com/local/codexbridge/LocalFileProvider.java')));
 check('输入框分隔线已调暗', css.includes('rgba(0, 210, 160, 0.07)'));
 check('style.css 有占位卡片样式', css.includes('.comfy-generating') && css.includes('.comfy-placeholder') && css.includes('.comfy-badge') && css.includes('comfy-breathe'));
+check('输入框加号+附件菜单', html.includes('id="attachBtn"') && html.includes('＋') && html.includes('id="attachMenu"'));
+check('文件选择 input 白名单', html.includes('id="fileInput"') && html.includes('accept=".txt,.md'));
+check('app 有 pendingFiles', app.includes('pendingFiles: []'));
+check('app 文件大小限制', app.includes('MAX_FILE_BYTES') && app.includes('RELAY_MAX_FILE_BYTES'));
+check('app 发送带 files', app.includes('files: files.map(f => ({ name: f.name, data: f.data }))'));
+check('app 文件类型校验', app.includes('TEXT_FILE_EXTS.includes(ext)') && app.includes('不支持的文件类型'));
+check('app 文件预览 chips', app.includes('file-chip') && app.includes('formatBytes'));
+check('style 附件菜单与文件 chips', css.includes('.attach-menu') && css.includes('.file-chip') && css.includes('.file-chip-msg'));
+check('server 处理 body.files', server.includes('(body.files || [])') && server.includes('saveUploadFile(f.data, f.name)'));
+check('server 文本读取传入 codex', server.includes('readUploadedText(file)') && server.includes("【附件：' + label + '】"));
+check('server 附件白名单/大小/清理', server.includes('TEXT_FILE_EXTS') && server.includes('MAX_FILE_BYTES') && server.includes("name.startsWith('upload-')"));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

@@ -254,6 +254,16 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
 }
 .msg.user .imgs { display: flex; gap: 6px; margin-bottom: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .msg.user .imgs img { width: 96px; height: 96px; object-fit: cover; border-radius: var(--radius-sm); }
+.msg.user .imgs .file-chip-msg {
+  display: inline-flex; align-items: center;
+  max-width: 230px;
+  padding: 6px 10px;
+  background: var(--surface-deep);
+  border: 1px solid rgba(0, 210, 160, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 12px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .msg-actions { display: flex; gap: 6px; margin-top: 5px; }
 .msg-act {
@@ -579,6 +589,21 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
 .image-previews { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .image-previews .thumb { position: relative; }
 .image-previews img { width: 64px; height: 64px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid rgba(0, 210, 160, 0.2); }
+.image-previews .file-chip {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  max-width: 230px;
+  padding: 9px 12px;
+  background: var(--surface-deep);
+  border: 1px solid rgba(0, 210, 160, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.image-previews .file-chip .file-name {
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.image-previews .file-chip .file-size { color: var(--text-muted); flex-shrink: 0; }
 .image-previews .x {
   position: absolute; top: -6px; right: -6px;
   width: 20px; height: 20px;
@@ -588,7 +613,29 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   text-align: center; cursor: pointer;
 }
 .composer-row { display: flex; align-items: flex-end; gap: 8px; }
-.attach-btn { font-size: 22px; cursor: pointer; padding: 6px; color: var(--text-muted); }
+.attach-wrap { position: relative; display: flex; }
+.attach-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px;
+  border: none; background: transparent;
+  font-size: 22px; line-height: 1; cursor: pointer;
+  color: var(--text-muted); border-radius: var(--radius-sm);
+}
+.attach-btn:active { background: var(--surface-deep); }
+.attach-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 70;
+  background: var(--surface);
+  border: 1px solid rgba(0, 210, 160, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.attach-menu button {
+  display: block; width: 132px; padding: 10px 12px; text-align: left;
+  border: none; background: transparent; color: var(--text);
+  border-radius: var(--radius-sm); font-size: 14px; font-family: inherit;
+}
+.attach-menu button:active { background: var(--surface-deep); }
 .composer textarea {
   flex: 1; resize: none;
   background: var(--surface-deep);

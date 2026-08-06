@@ -12,7 +12,10 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.28';
+  const APP_VERSION = '10.29';
+  const MAX_FILE_BYTES = 2 * 1024 * 1024;
+  const RELAY_MAX_FILE_BYTES = 512 * 1024;
+  const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -64,6 +67,7 @@
     blocks: new Map(),   // itemId -> block element
     approvals: new Map(), // requestId -> card element
     pendingImages: [],
+    pendingFiles: [],
     pageTurns: [],       // 当前会话已加载的历史轮次（旧 → 新）
     threadPage: { hasMore: false, nextCursor: 0, loading: false }
   };
@@ -865,14 +869,18 @@
     return el;
   }
 
-  function addUserMessage(text, images) {
+  function addUserMessage(text, images, files) {
     const el = document.createElement('div');
     el.className = 'msg user';
     let imgs = '';
     if (images && images.length) {
       imgs = '<div class="imgs">' + images.map(u => '<span class="agent-img"><img src="' + escapeHtml(u) + '" data-save="' + escapeHtml(u) + '"><button class="img-save-btn">保存到相册</button></span>').join('') + '</div>';
     }
-    el.innerHTML = '<div class="wrap">' + imgs + '<div class="bubble">' + escapeHtml(text) + '</div></div>' +
+    let atts = '';
+    if (files && files.length) {
+      atts = '<div class="imgs file-att-list">' + files.map(f => '<span class="file-chip-msg">📄 ' + escapeHtml(f.name) + ' · ' + formatBytes(f.size) + '</span>').join('') + '</div>';
+    }
+    el.innerHTML = '<div class="wrap">' + imgs + atts + '<div class="bubble">' + escapeHtml(text) + '</div></div>' +
       '<div class="msg-actions">' +
       '<button class="msg-act">复制</button><button class="msg-act">引用</button>' +
       '</div>';
@@ -1723,7 +1731,8 @@
     stopSpeaking(); // 发送即停旧语音播放并取消旧合成
     const text = inputBox.value.trim();
     const images = state.pendingImages.slice();
-    if (!text && !images.length) return;
+    const files = state.pendingFiles.slice();
+    if (!text && !images.length && !files.length) return;
     let sendText = text;
     if (quotedMsg) {
       sendText = '【引用 ' + quotedMsg.author + '】' + quotedMsg.text + '\n' + text;
@@ -1731,6 +1740,7 @@
     }
     inputBox.value = '';
     state.pendingImages = [];
+    state.pendingFiles = [];
     renderImagePreviews();
 
     if (relayCfg && (!relayChannel || !relayChannel.ready)) {
@@ -1745,7 +1755,7 @@
         return;
       }
     }
-    addUserMessage(sendText, images.map(i => i.dataUrl));
+    addUserMessage(sendText, images.map(i => i.dataUrl), files);
     // 预创建：消息里命中“两张/三张/N张…图”时，立即创建整叠卡片，不等 comfyStarted
     const preCount = parseImageCount(sendText);
     if (preCount >= 2) precreateComfyStack(preCount);
@@ -1755,6 +1765,7 @@
         threadId: state.currentId,
         text: sendText,
         images: images.map(i => ({ name: i.name, data: i.dataUrl })),
+        files: files.map(f => ({ name: f.name, data: f.data })),
         effort: currentEffort,
         autoSpeak: autoSpeak
       });
@@ -1818,6 +1829,64 @@
     renderImagePreviews();
   });
 
+  // ---------- attach menu ----------
+  const attachBtn = $('attachBtn');
+  const attachMenu = $('attachMenu');
+  function closeAttachMenu() { attachMenu.classList.add('hidden'); }
+  attachBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    attachMenu.classList.toggle('hidden');
+  });
+  attachMenu.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-pick]');
+    if (!btn) return;
+    closeAttachMenu();
+    if (btn.dataset.pick === 'image') $('imageInput').click();
+    else $('fileInput').click();
+  });
+  if (document.addEventListener) document.addEventListener('click', closeAttachMenu);
+
+  // ---------- file attach ----------
+  $('fileInput').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    const limit = relayCfg ? RELAY_MAX_FILE_BYTES : MAX_FILE_BYTES;
+    for (const f of files) {
+      const ext = (f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+      if (!TEXT_FILE_EXTS.includes(ext)) {
+        showToast('不支持的文件类型：' + f.name + '（仅支持文本类文件：txt/md/json/csv/代码等）', true);
+        continue;
+      }
+      if (f.size > limit) {
+        showToast((relayCfg ? '中继模式' : '') + '单文件上限 ' + formatBytes(limit) + '：' + f.name, true);
+        continue;
+      }
+      try {
+        const dataUrl = await readFileDataUrl(f);
+        state.pendingFiles.push({ name: f.name, size: f.size, data: dataUrl });
+      } catch (_) {
+        showToast('读取文件失败：' + f.name, true);
+      }
+    }
+    renderImagePreviews();
+  });
+
+  function readFileDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = reject;
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function formatBytes(n) {
+    if (!n && n !== 0) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
   function compressImage(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -1854,6 +1923,27 @@
         state.pendingImages.splice(i, 1);
         renderImagePreviews();
       });
+      box.appendChild(d);
+    });
+    state.pendingFiles.forEach((f, i) => {
+      const d = document.createElement('div');
+      d.className = 'file-chip';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'file-name';
+      nameEl.textContent = '📄 ' + f.name;
+      const sizeEl = document.createElement('span');
+      sizeEl.className = 'file-size';
+      sizeEl.textContent = formatBytes(f.size);
+      const x = document.createElement('span');
+      x.className = 'x';
+      x.textContent = '×';
+      x.addEventListener('click', () => {
+        state.pendingFiles.splice(i, 1);
+        renderImagePreviews();
+      });
+      d.appendChild(nameEl);
+      d.appendChild(sizeEl);
+      d.appendChild(x);
       box.appendChild(d);
     });
   }

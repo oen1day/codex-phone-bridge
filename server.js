@@ -15,6 +15,9 @@ const PATHS_PATH = path.join(ROOT, 'paths.json');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const UPLOAD_DIR = path.join(ROOT, 'uploads');
 const TTS_DIR = path.join(UPLOAD_DIR, 'tts');
+const TEXT_FILE_EXTS = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties']);
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_FILE_TEXT_CHARS = 200 * 1024;
 const PHONE_THREADS_PATH = path.join(ROOT, 'phone-threads.json');
 const PHONE_CAPS_PATH = path.join(ROOT, 'phone-caps.json');
 
@@ -131,7 +134,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.28';
+const VERSION = '10.29';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1577,13 +1580,13 @@ function comfyImageDataUrl(p) {
   return { dataUrl: 'data:' + mime + ';base64,' + data.toString('base64') };
 }
 
-// 兜底清理：uploads/ 下超过 30 分钟且未被删除的 comfy-* 生成图
+// 兜底清理：uploads/ 下超过 30 分钟且未被删除的 comfy-* 生成图与 upload-* 附件
 function cleanupComfyImages() {
   try {
     if (!fs.existsSync(UPLOAD_DIR)) return;
     const now = Date.now();
     for (const name of fs.readdirSync(UPLOAD_DIR)) {
-      if (!name.startsWith('comfy-')) continue;
+      if (!name.startsWith('comfy-') && !name.startsWith('upload-')) continue;
       try {
         const st = fs.statSync(path.join(UPLOAD_DIR, name));
         if (now - st.mtimeMs > 30 * 60 * 1000) fs.unlinkSync(path.join(UPLOAD_DIR, name));
@@ -1686,6 +1689,12 @@ async function apiDispatch(method, params, clientId) {
       for (const img of (body.images || [])) {
         const file = saveUpload(img.data, img.name);
         input.push({ type: 'localImage', path: file });
+      }
+      for (const f of (body.files || [])) {
+        const file = saveUploadFile(f.data, f.name);
+        const label = f.name || path.basename(file);
+        const content = readUploadedText(file);
+        input.push({ type: 'text', text: '【附件：' + label + '】\n' + content });
       }
       if (!input.length) throw new Error('没有内容');
       const tp = { threadId, input };
@@ -1978,6 +1987,31 @@ function saveUpload(base64, name) {
   const file = path.join(UPLOAD_DIR, id + ext);
   fs.writeFileSync(file, data);
   return file;
+}
+
+function saveUploadFile(base64, name) {
+  const ext = (path.extname(name || '').toLowerCase());
+  if (!TEXT_FILE_EXTS.has(ext)) {
+    throw new Error('不支持的文件类型：' + (name || '') + '（仅支持文本类文件：txt/md/json/csv/代码等）');
+  }
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  const m = /^data:([^;]+);base64,(.*)$/s.exec(base64 || '');
+  const data = m ? Buffer.from(m[2], 'base64') : Buffer.from(base64 || '', 'base64');
+  if (!data.length) throw new Error('文件内容为空');
+  if (data.length > MAX_FILE_BYTES) throw new Error('文件过大：单文件上限 2MB');
+  const id = crypto.randomBytes(8).toString('hex');
+  const file = path.join(UPLOAD_DIR, 'upload-' + id + ext);
+  fs.writeFileSync(file, data);
+  return file;
+}
+
+function readUploadedText(file) {
+  let raw = fs.readFileSync(file, 'utf8');
+  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+  if (raw.length > MAX_FILE_TEXT_CHARS) {
+    raw = raw.slice(0, MAX_FILE_TEXT_CHARS) + '\n...（文件内容过长，已截断显示）';
+  }
+  return raw;
 }
 
 function toWebPath(p) {

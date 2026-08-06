@@ -73,9 +73,15 @@
       <div class="composer">
         <div id="imagePreviews" class="image-previews"></div>
         <div class="composer-row">
-          <label class="attach-btn" title="添加图片">🖼
-            <input id="imageInput" type="file" accept="image/*" multiple hidden>
-          </label>
+          <div class="attach-wrap">
+            <button type="button" class="attach-btn" id="attachBtn" title="添加图片或文件">＋</button>
+            <div class="attach-menu hidden" id="attachMenu">
+              <button type="button" data-pick="image">🖼 添加图片</button>
+              <button type="button" data-pick="file">📄 添加文件</button>
+            </div>
+          </div>
+          <input id="imageInput" type="file" accept="image/*" multiple hidden>
+          <input id="fileInput" type="file" accept=".txt,.md,.markdown,.json,.csv,.tsv,.log,.xml,.yaml,.yml,.ini,.conf,.cfg,.js,.mjs,.cjs,.ts,.jsx,.tsx,.py,.rb,.go,.rs,.java,.c,.h,.cpp,.hpp,.cs,.php,.html,.htm,.css,.scss,.sql,.sh,.bat,.cmd,.ps1,.toml,.properties" multiple hidden>
           <textarea id="inputBox" rows="1" placeholder="给鳍点AI发消息…"></textarea>
           <button id="sendBtn" class="btn primary small">发送</button>
         </div>
