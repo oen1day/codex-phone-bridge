@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.14";
+    private static final String APP_VERSION = "10.15";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -352,6 +352,65 @@ public class MainActivity extends Activity {
                 return f.getAbsolutePath();
             } catch (Exception e) {
                 return "";
+            }
+        }
+
+        // 全屏预览图片：http 直接打开；dataURL/本地缓存先落临时文件再走 content://
+        @JavascriptInterface
+        public String openImageViewer(String url) {
+            try {
+                if (url == null || url.isEmpty()) return "空地址";
+                final android.net.Uri uri;
+                if (url.startsWith("http://") || url.startsWith("https://")) {
+                    uri = android.net.Uri.parse(url);
+                } else {
+                    byte[] data;
+                    String ext = ".png";
+                    if (url.startsWith("data:image")) {
+                        String b64 = url.substring(url.indexOf(',') + 1);
+                        data = Base64.decode(b64, Base64.DEFAULT);
+                        if (url.startsWith("data:image/jpeg")) ext = ".jpg";
+                    } else if (url.startsWith("file://")) {
+                        data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(url.substring("file://".length())));
+                    } else {
+                        java.net.URL u = new java.net.URL(url);
+                        java.net.HttpURLConnection c = (java.net.HttpURLConnection) u.openConnection();
+                        c.setConnectTimeout(10000);
+                        c.setReadTimeout(30000);
+                        c.setRequestProperty("User-Agent", "codex-phone-bridge");
+                        java.io.InputStream in = c.getInputStream();
+                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                        in.close();
+                        data = bos.toByteArray();
+                        String ct = c.getContentType();
+                        if (ct != null && ct.contains("jpeg")) ext = ".jpg";
+                        c.disconnect();
+                    }
+                    String name = "viewer_" + System.currentTimeMillis() + ext;
+                    File f = new File(getCacheDir(), name);
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                    fos.write(data);
+                    fos.close();
+                    uri = android.net.Uri.parse("content://" + LocalFileProvider.AUTHORITY + "/" + name);
+                }
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        try {
+                            Intent i = new Intent(Intent.ACTION_VIEW);
+                            i.setDataAndType(uri, "image/*");
+                            if ("content".equals(uri.getScheme())) {
+                                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            }
+                            startActivity(i);
+                        } catch (Exception ignored) {}
+                    }
+                });
+                return "ok";
+            } catch (Exception e) {
+                return "打开失败: " + (e.getMessage() == null ? e.toString() : e.getMessage());
             }
         }
 

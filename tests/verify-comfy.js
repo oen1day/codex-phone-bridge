@@ -76,6 +76,12 @@ const css = read('public/style.css');
 check('占位卡有固有宽高比', app.includes('width="320" height="200"') && css.includes('aspect-ratio: 320 / 200'));
 check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - comfyStartTs)'));
 check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
+check('app 点击图片全屏预览', app.includes('openImageViewer') && app.includes("tagName === 'IMG'"));
+check('app comfy 事件诊断日志', app.includes("console.log('[event] ' + method)") || app.includes('/^comfy/.test(method)'));
+check('Java 有图片查看器', java.includes('openImageViewer') && java.includes('LocalFileProvider.AUTHORITY'));
+check('Manifest 注册本地 Provider', read('android/AndroidManifest.xml').includes('LocalFileProvider'));
+check('LocalFileProvider 文件存在', fs.existsSync(path.join(root, 'android/src/com/local/codexbridge/LocalFileProvider.java')));
+check('输入框分隔线已调暗', css.includes('rgba(0, 210, 160, 0.07)'));
 check('style.css 有占位卡片样式', css.includes('.comfy-generating') && css.includes('.comfy-placeholder') && css.includes('.comfy-badge') && css.includes('comfy-breathe'));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');

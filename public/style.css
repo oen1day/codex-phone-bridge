@@ -498,7 +498,7 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
 #quoteCancel { background: transparent; border: none; color: var(--text-muted); font-size: 14px; cursor: pointer; padding: 2px 6px; }
 
 /* ---------- 输入区 ---------- */
-.composer { padding: 8px 12px 12px; background: var(--surface); border-top: 1px solid rgba(0, 210, 160, 0.12); }
+.composer { padding: 8px 12px 12px; background: var(--surface); border-top: 1px solid rgba(0, 210, 160, 0.07); }
 .image-previews { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .image-previews .thumb { position: relative; }
 .image-previews img { width: 64px; height: 64px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid rgba(0, 210, 160, 0.2); }

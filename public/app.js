@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.14';
+  const APP_VERSION = '10.15';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -1009,6 +1009,22 @@
     if (btn) {
       const img = btn.parentNode && btn.parentNode.querySelector('img');
       if (img && img.src) saveImageToDevice(img.src);
+      return;
+    }
+    // 点击图片本身 → 全屏预览（手机走系统图片查看器，电脑网页新标签打开）
+    const imgEl = e.target && e.target.tagName === 'IMG' ? e.target : null;
+    if (imgEl && imgEl.src) {
+      let url = imgEl.src;
+      if (url.indexOf('/') === 0 && url.indexOf('//') !== 0 && !/^data:/.test(url)) {
+        try { url = location.origin + url; } catch (_) {}
+      }
+      try {
+        if (window.AndroidBridge && window.AndroidBridge.openImageViewer) {
+          window.AndroidBridge.openImageViewer(url);
+        } else {
+          window.open(url, '_blank');
+        }
+      } catch (_) {}
     }
   });
   messagesEl.addEventListener('load', (e) => {
@@ -1048,6 +1064,7 @@
   function handleNotification(msg) {
     const method = msg.method;
     const params = msg.params || {};
+    if (/^comfy/.test(method)) console.log('[event] ' + method + ' ' + JSON.stringify(params).slice(0, 200));
     if (!params.threadId && !/^comfy/.test(method)) return;
     if (params.threadId && (!state.currentId || params.threadId !== state.currentId)) return;
     traceEvent(method);
