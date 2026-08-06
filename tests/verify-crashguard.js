@@ -31,6 +31,7 @@ check('MCP 透传业务错误', mcp.includes('result.ok === false && result.erro
 check('start.ps1 自动重启', start.includes('$restartLeft') && start.includes('服务异常退出'));
 check('start.ps1 无全局 Stop', !start.includes("$ErrorActionPreference = 'Stop'"));
 check('start.ps1 用 Start-Process 不接管道', start.includes('Start-Process') && start.includes('-RedirectStandardError'));
+check('config 保存改为单字段不覆盖', server.includes('function saveConfigField') && !server.includes('function saveConfig()'));
 check('空线程无 rollout 按空对话返回', server.includes('no rollout|not materialized') && server.includes("status: { type: 'idle' }"));
 
 console.log('崩溃兜底验证: ' + pass + ' 通过 / ' + fail + ' 失败');

@@ -142,22 +142,22 @@ if (!bridgeId.shareKey) {
 }
 if (config.shareKey !== bridgeId.shareKey) {
   config.shareKey = bridgeId.shareKey;
-  saveConfig();
+  saveConfigField('shareKey', config.shareKey);
 }
 if (!config.password) {
   config.password = generatePassword();
-  saveConfig();
+  saveConfigField('password', config.password);
   console.log('[config] 已生成新的访问密码（新手机一键配置/手动填写用）');
 }
 if (!config.updateUrl) {
   config.updateUrl = 'https://raw.githubusercontent.com/oen1day/codex-phone-bridge/main/version.json';
-  saveConfig();
+  saveConfigField('updateUrl', config.updateUrl);
 }
 if (config.relayEnabled) {
   const room = (config.relayRoomCode || '').trim().toUpperCase();
   if (!room) {
     config.relayRoomCode = generateRoomCode();
-    saveConfig();
+    saveConfigField('relayRoomCode', config.relayRoomCode);
     console.log('[config] 已生成新的配对码: ' + config.relayRoomCode);
   } else {
     config.relayRoomCode = room;
@@ -442,9 +442,13 @@ const relayPhones = new Map();
 const turnThreads = new Map();
 let activeTurn = null;
 
-function saveConfig() {
+// 只更新 config.json 的单个字段，绝不整体覆盖，避免清掉用户手填的配置（如 comfyFirebaseRefreshToken）
+function saveConfigField(key, value) {
   try {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch (_) {}
+    cfg[key] = value;
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
   } catch (_) {}
 }
 
