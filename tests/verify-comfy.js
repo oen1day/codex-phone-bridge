@@ -168,6 +168,11 @@ check('style 打开按钮高亮', css.includes('.agent-file-btn.open'));
 check('Java 有 openFile 方法', java.includes('public String openFile(') && java.includes('LocalFileProvider.AUTHORITY') && java.includes('Intent.createChooser'));
 check('Java 保存到公共 Downloads', java.includes('MediaStore.Downloads') && java.includes('DIRECTORY_DOWNLOADS') && java.includes('getExternalStoragePublicDirectory'));
 check('LocalFileProvider 服务下载目录', read('android/src/com/local/codexbridge/LocalFileProvider.java').includes('"downloads/" + name') && read('android/src/com/local/codexbridge/LocalFileProvider.java').includes('MimeTypeMap'));
+check('server 系统要求独立常量', server.includes('const SYSTEM_REQUIREMENT =') && server.includes('publish_file 工具'));
+check('server 用户消息只存原文', server.includes("if (userText) input.push({ type: 'text', text: userText })") && !server.includes('promptText = userText'));
+check('server 历史剥离系统要求', server.includes('function cleanThreadHistory(') && server.includes('SYSTEM_REQUIREMENT.trim()') && server.includes('\\[系统要求：[\\s\\S]*\\]'));
+check('前端过滤历史系统要求', app.includes('\\[系统要求：[\\s\\S]*\\]') && app.includes('兜底：历史里混入的系统要求不再显示'));
+check('前端用户气泡兜底过滤', app.includes('兜底：不把系统要求显示在用户气泡里'));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

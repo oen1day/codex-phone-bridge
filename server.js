@@ -18,6 +18,7 @@ const TTS_DIR = path.join(UPLOAD_DIR, 'tts');
 const TEXT_FILE_EXTS = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties']);
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_FILE_TEXT_CHARS = 200 * 1024;
+const SYSTEM_REQUIREMENT = '[系统要求：请始终使用简体中文回复用户。生成或修改 Word/PPT/PDF/Excel 等文件后，必须调用 publish_file 工具把文件发布为下载链接，并在回复末尾用文件下载语法展示：📄 [文件名](链接)。]';
 const PUB_FILE_EXTS = new Set(['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.pdf', '.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.zip', '.apk']);
 const MAX_PUB_FILE_BYTES = 20 * 1024 * 1024;
 // 必须是 3 的倍数：分片 base64 无内部 padding，前端直接拼接即可完整还原
@@ -152,7 +153,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.33';
+const VERSION = '10.34';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1177,15 +1178,33 @@ function readTtsStreamFrames(text, jobId, onFrame, onEnd) {
   return { ctrl, task };
 }
 
+// 剥离用户消息里混入的系统要求文本（老数据可能把要求拼进同一段，新数据是独立文本项）
+function cleanThreadHistory(thread) {
+  const raw = (thread && thread.thread && Array.isArray(thread.thread.turns)) ? thread.thread : (thread || {});
+  for (const t of (raw.turns || [])) {
+    for (const item of (t.items || [])) {
+      if (!item || item.type !== 'userMessage') continue;
+      if (Array.isArray(item.content)) {
+        item.content = item.content.filter(c => !(c && c.type === 'text' && String(c.text || '').trim() === SYSTEM_REQUIREMENT.trim()));
+        for (const c of item.content) {
+          if (c && c.type === 'text') c.text = String(c.text || '').replace(/\s*\[系统要求：[\s\S]*\]\s*$/, '');
+        }
+      }
+      if (item.text) item.text = String(item.text).replace(/\s*\[系统要求：[\s\S]*\]\s*$/, '');
+    }
+  }
+  return thread;
+}
+
 // 读取线程（带“未加载先恢复”的兜底逻辑）
 async function readThreadTurns(threadId) {
   const c = await getClient();
   try {
-    return await c.call('thread/read', { threadId, includeTurns: true });
+    return cleanThreadHistory(await c.call('thread/read', { threadId, includeTurns: true }));
   } catch (e) {
     const emsg = (e && e.message) || '';
     if (/includeTurns/i.test(emsg) && !/not materialized|thread not found/i.test(emsg)) {
-      return await c.call('thread/read', { threadId, includeTurns: false });
+      return cleanThreadHistory(await c.call('thread/read', { threadId, includeTurns: false }));
     }
     if (/not materialized|thread not found|no rollout/i.test(emsg)) {
       console.log('[codex] 线程未加载，正在恢复线程: ' + threadId);
@@ -1201,11 +1220,11 @@ async function readThreadTurns(threadId) {
         console.error('[codex] 恢复线程失败: ' + e2msg);
       }
       try {
-        return await c.call('thread/read', { threadId, includeTurns: true });
+        return cleanThreadHistory(await c.call('thread/read', { threadId, includeTurns: true }));
       } catch (e3) {
         const emsg3 = (e3 && e3.message) || '';
         if (/includeTurns/i.test(emsg3)) {
-          return await c.call('thread/read', { threadId, includeTurns: false });
+          return cleanThreadHistory(await c.call('thread/read', { threadId, includeTurns: false }));
         }
         if (/no rollout|not materialized/i.test(emsg3)) {
           return { thread: { id: threadId, title: '', status: { type: 'idle' }, turns: [] } };
@@ -1712,8 +1731,9 @@ async function apiDispatch(method, params, clientId) {
       registerPhoneThread(threadId, clientId);
       const input = [];
       const userText = body.text ? String(body.text) : '';
-      const promptText = userText + (userText ? '\n\n[系统要求：请始终使用简体中文回复用户。生成或修改 Word/PPT/PDF/Excel 等文件后，必须调用 publish_file 工具把文件发布为下载链接，并在回复末尾用文件下载语法展示：📄 [文件名](链接)。]' : '');
-      if (promptText) input.push({ type: 'text', text: promptText });
+      // 用户消息只存原文；系统要求作为独立文本项注入，读取历史时会被剥离，不显示在用户气泡里
+      if (userText) input.push({ type: 'text', text: userText });
+      if (userText) input.push({ type: 'text', text: SYSTEM_REQUIREMENT });
       for (const img of (body.images || [])) {
         const file = saveUpload(img.data, img.name);
         input.push({ type: 'localImage', path: file });

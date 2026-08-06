@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.33';
+  const APP_VERSION = '10.34';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -812,7 +812,7 @@
           if (w) images.push(w);
         }
       }
-      text = text.replace(/\n\n\[系统要求：请始终使用简体中文回复用户。\]$/, '');
+      text = text.replace(/\s*\[系统要求：[\s\S]*\]\s*$/, ''); // 兜底：历史里混入的系统要求不再显示
       addUserMessage(text, images);
       return;
     }
@@ -870,6 +870,7 @@
   }
 
   function addUserMessage(text, images, files) {
+    text = String(text || '').replace(/\s*\[系统要求：[\s\S]*\]\s*$/, ''); // 兜底：不把系统要求显示在用户气泡里
     const el = document.createElement('div');
     el.className = 'msg user';
     let imgs = '';
