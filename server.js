@@ -1172,21 +1172,24 @@ let comfyIdTokenCache = { token: null, expiresAt: 0 };
 // Comfy Org 谷歌登录用的是 Firebase ID Token（约 1 小时有效）；
 // 有 refreshToken 时桥接自动续期，用户只需复制一次。
 async function getComfyAuthToken() {
-  if (config.comfyAuthToken) return config.comfyAuthToken;
-  if (!config.comfyFirebaseRefreshToken) return null;
-  if (comfyIdTokenCache.token && Date.now() < comfyIdTokenCache.expiresAt - 5 * 60 * 1000) {
-    return comfyIdTokenCache.token;
+  // 优先用长期刷新令牌自动续期；comfyAuthToken 只是没有刷新令牌时的临时兜底
+  if (config.comfyFirebaseRefreshToken) {
+    if (comfyIdTokenCache.token && Date.now() < comfyIdTokenCache.expiresAt - 5 * 60 * 1000) {
+      return comfyIdTokenCache.token;
+    }
+    const r = await fetch('https://securetoken.googleapis.com/v1/token?key=' + COMFY_FIREBASE_API_KEY, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: config.comfyFirebaseRefreshToken })
+    });
+    if (!r.ok) throw new BusinessError('Comfy 登录令牌刷新失败（请重新复制 firebase 刷新令牌到 config.json）');
+    const data = await r.json();
+    if (!data.id_token) throw new BusinessError('Comfy 登录令牌刷新失败：未返回 id_token');
+    comfyIdTokenCache = { token: data.id_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
+    return data.id_token;
   }
-  const r = await fetch('https://securetoken.googleapis.com/v1/token?key=' + COMFY_FIREBASE_API_KEY, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: config.comfyFirebaseRefreshToken })
-  });
-  if (!r.ok) throw new BusinessError('Comfy 登录令牌刷新失败（请重新复制 firebase 刷新令牌到 config.json）');
-  const data = await r.json();
-  if (!data.id_token) throw new BusinessError('Comfy 登录令牌刷新失败：未返回 id_token');
-  comfyIdTokenCache = { token: data.id_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
-  return data.id_token;
+  if (config.comfyAuthToken) return config.comfyAuthToken;
+  return null;
 }
 
 function findComfyInputDir() {
