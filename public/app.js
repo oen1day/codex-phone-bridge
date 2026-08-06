@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.43';
+  const APP_VERSION = '10.44';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -1038,7 +1038,7 @@
     const s = getDownloadedFiles();
     s.add(url);
     const arr = Array.from(s);
-    while (arr.length > 200) arr.shift(); // 已下载标记最多 200 条，防止无限增长
+    while (arr.length > 100) arr.shift(); // 已下载标记最多 100 条，防止无限增长
     try { localStorage.setItem('downloadedFiles', JSON.stringify(arr)); } catch (_) {}
   }
   function setFileBtnOpen(url) {

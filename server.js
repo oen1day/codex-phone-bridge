@@ -156,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.43';
+const VERSION = '10.44';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -976,10 +976,29 @@ function pruneTtsCache() {
       if (!keys.has(base) || keys.get(base) < t) keys.set(base, t);
     }
     const sorted = [...keys.entries()].sort((a, b) => b[1] - a[1]);
-    for (const it of sorted.slice(200)) {
+    const del = base => {
       for (const ext of ['.wav', '.mp3']) {
-        try { fs.unlinkSync(path.join(TTS_DIR, it[0] + ext)); } catch (_) {}
+        try { fs.unlinkSync(path.join(TTS_DIR, base + ext)); } catch (_) {}
       }
+    };
+    const sumSize = base => {
+      let s = 0;
+      for (const ext of ['.wav', '.mp3']) {
+        try { s += fs.statSync(path.join(TTS_DIR, base + ext)).size; } catch (_) {}
+      }
+      return s;
+    };
+    for (const it of sorted.slice(200)) del(it[0]); // 条数上限：保留最近 200 条
+    // 体积上限：超过 100MB 继续删最旧，直到低于 80MB
+    const kept = sorted.slice(0, 200);
+    let total = 0;
+    for (const it of kept) total += sumSize(it[0]);
+    let i = kept.length - 1;
+    while (total > 80 * 1024 * 1024 && i >= 0) {
+      const s = sumSize(kept[i][0]);
+      del(kept[i][0]);
+      total -= s;
+      i--;
     }
   } catch (_) {}
 }
@@ -1631,13 +1650,14 @@ function comfyImageDataUrl(p) {
   return { dataUrl: 'data:' + mime + ';base64,' + data.toString('base64') };
 }
 
-// 兜底清理：uploads/ 下超过 30 分钟且未被删除的 comfy-* 生成图与 upload-* 附件
+// 兜底清理：uploads/ 下超过 30 分钟且未被删除的 comfy-*/upload-* 与无前缀上传图（16 位 hex 命名的图片）
 function cleanupComfyImages() {
   try {
     if (!fs.existsSync(UPLOAD_DIR)) return;
     const now = Date.now();
     for (const name of fs.readdirSync(UPLOAD_DIR)) {
-      if (!name.startsWith('comfy-') && !name.startsWith('upload-')) continue;
+      const noPrefixImg = /^[0-9a-f]{8,32}\.(png|jpe?g|gif|webp)$/i.test(name);
+      if (!name.startsWith('comfy-') && !name.startsWith('upload-') && !noPrefixImg) continue;
       try {
         const st = fs.statSync(path.join(UPLOAD_DIR, name));
         if (now - st.mtimeMs > 30 * 60 * 1000) fs.unlinkSync(path.join(UPLOAD_DIR, name));
