@@ -146,11 +146,19 @@ check('server 发布仅限工作目录/uploads', server.includes('仅支持发�
 check('MCP 有 publish_file 工具', mcp.includes("name: 'publish_file'") && mcp.includes("'/api/file/publish'"));
 check('MCP publish_file 描述带下载语法', mcp.includes('📄 [文件名](返回的url)'));
 check('app 渲染文件下载卡片', app.includes('agent-file') && app.includes('agent-file-btn') && app.includes('downloadAgentFile'));
-check('app 文件下载中继提示', app.includes('中继模式暂不支持下载文件'));
+check('app 中继分片下载流程', app.includes('function relayDownloadFile(') && app.includes('正在传输文件到手机…') && app.includes("apiCall('fileData'"));
+check('app 分片并发拉取', app.includes('Math.min(4, meta.chunks)') && app.includes("index: idx") && app.includes('60000'));
+check('app 中继保存用 dataURL', app.includes("saveFileToPhone(dataUrl"));
+check('app 中继失败明确报错', app.includes("分片 ' + (idx + 1) + ' 获取失败") && app.includes('下载失败: '));
 check('app 调用原生保存文件', app.includes('saveFileToPhone'));
 check('style 有文件下载卡片', css.includes('.agent-file') && css.includes('.agent-file-btn'));
 check('Java 有保存文件方法', java.includes('saveFileToPhone') && java.includes('getFilesDir(), "downloads"'));
 check('AI 行为规范要求发布文件', server.includes('publish_file 工具') && server.includes('📄 [文件名](链接)'));
+check('server 有中继文件分片接口', server.includes("case 'fileData':") && server.includes('function safePubPath(') && server.includes('FILE_DATA_CHUNK'));
+check('server 分片只允许 pub-*', server.includes('pub-[A-Za-z0-9._-]+') && server.includes('仅支持 /uploads/pub-*'));
+check('server 分片返回元信息', server.includes('params.meta') && server.includes('chunks: total') && server.includes('chunkBytes'));
+check('server 分片读取 base64', server.includes('buf.toString(\'base64\')') && server.includes('fs.readSync'));
+check('server 文件数据 HTTP 端点', server.includes("'/api/file/data'"));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

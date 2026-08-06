@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.30';
+  const APP_VERSION = '10.31';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -989,7 +989,7 @@
   function downloadAgentFile(url, name) {
     if (!url) return;
     if (relayCfg) {
-      showToast('中继模式暂不支持下载文件，请改用局域网模式', true);
+      relayDownloadFile(url, name);
       return;
     }
     let abs = url;
@@ -1015,6 +1015,49 @@
       showToast('已开始下载');
     } catch (e) {
       showToast('下载失败: ' + (e && e.message), true);
+    }
+  }
+
+  // 中继模式：文件经中继分片回传 → dataURL → 交原生保存（公共 MQTT 单包约 1MB，必须分片）
+  async function relayDownloadFile(url, name) {
+    try {
+      const meta = await apiCall('fileData', { path: url, meta: true }, 30000);
+      if (!meta || !meta.ok || !meta.chunks) throw new Error('无法获取文件信息');
+      if (meta.size > 20 * 1024 * 1024) throw new Error('文件过大：中继下载上限 20MB');
+      const mime = meta.mime || 'application/octet-stream';
+      const fname = name || meta.name || 'file';
+      showToast('正在传输文件到手机…');
+      const parts = new Array(meta.chunks);
+      const queue = [];
+      for (let i = 0; i < meta.chunks; i++) queue.push(i);
+      const workers = Math.min(4, meta.chunks);
+      async function worker() {
+        while (queue.length) {
+          const idx = queue.shift();
+          const r = await apiCall('fileData', { path: url, index: idx }, 60000);
+          if (!r || !r.ok || r.data == null) throw new Error('分片 ' + (idx + 1) + ' 获取失败');
+          parts[idx] = r.data; // 每片 300KB（3 的倍数），无内部 padding，直接拼接即完整 base64
+        }
+      }
+      await Promise.all(Array.from({ length: workers }, worker));
+      const dataUrl = 'data:' + mime + ';base64,' + parts.join('');
+      if (window.AndroidBridge && window.AndroidBridge.saveFileToPhone) {
+        const r = window.AndroidBridge.saveFileToPhone(dataUrl, fname);
+        if (r === 'ok') {
+          showToast('已下载到手机');
+          return;
+        }
+        throw new Error(r || '保存失败');
+      }
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      showToast('已开始下载');
+    } catch (e) {
+      showToast('下载失败: ' + ((e && e.message) || '未知错误'), true);
     }
   }
 

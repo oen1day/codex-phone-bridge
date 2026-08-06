@@ -20,6 +20,8 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_FILE_TEXT_CHARS = 200 * 1024;
 const PUB_FILE_EXTS = new Set(['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.pdf', '.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.zip', '.apk']);
 const MAX_PUB_FILE_BYTES = 20 * 1024 * 1024;
+// 必须是 3 的倍数：分片 base64 无内部 padding，前端直接拼接即可完整还原
+const FILE_DATA_CHUNK = 300 * 1024;
 const UPLOAD_MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -150,7 +152,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.30';
+const VERSION = '10.31';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1586,6 +1588,16 @@ function safeComfyPath(p) {
   return f;
 }
 
+// 只允许中继下载 uploads/ 下 pub-* 发布的文件，防路径穿越
+function safePubPath(p) {
+  const s = String(p || '');
+  const m = /^\/uploads\/(pub-[A-Za-z0-9._-]+)$/.exec(s);
+  if (!m) return null;
+  const f = path.join(UPLOAD_DIR, m[1]);
+  if (!f.startsWith(UPLOAD_DIR) || !fs.existsSync(f)) return null;
+  return f;
+}
+
 // 中继模式取图：把 uploads/comfy-* 转成 dataURL 经中继回传手机
 function comfyImageDataUrl(p) {
   const f = safeComfyPath(p);
@@ -1903,6 +1915,31 @@ async function apiDispatch(method, params, clientId) {
       fs.copyFileSync(file, out);
       const name = path.basename(file);
       return { ok: true, url: '/uploads/pub-' + id + ext, name, size: st.size };
+    }
+    case 'fileData': {
+      const f = safePubPath(params && params.path);
+      if (!f) throw new BusinessError('无效的文件路径（仅支持 /uploads/pub-*）');
+      const st = fs.statSync(f);
+      if (!st.isFile()) throw new BusinessError('不是文件');
+      if (st.size > MAX_PUB_FILE_BYTES) throw new BusinessError('文件过大：中继下载上限 20MB');
+      const ext = path.extname(f).toLowerCase();
+      const mime = UPLOAD_MIME[ext] || 'application/octet-stream';
+      const total = Math.max(1, Math.ceil(st.size / FILE_DATA_CHUNK));
+      if (params && params.meta) {
+        return { ok: true, name: path.basename(f), size: st.size, mime, chunks: total, chunkBytes: FILE_DATA_CHUNK };
+      }
+      const index = Number(params && params.index);
+      if (!Number.isInteger(index) || index < 0 || index >= total) throw new BusinessError('无效的分片序号');
+      const start = index * FILE_DATA_CHUNK;
+      const len = Math.min(FILE_DATA_CHUNK, st.size - start);
+      const buf = Buffer.alloc(len);
+      const fd = fs.openSync(f, 'r');
+      try {
+        fs.readSync(fd, buf, 0, len, start);
+      } finally {
+        fs.closeSync(fd);
+      }
+      return { ok: true, index, total, data: buf.toString('base64') };
     }
     default:
       throw new Error('未知方法: ' + method);
@@ -2271,6 +2308,11 @@ async function handleApi(req, res, url) {
     if (p === '/api/file/publish' && req.method === 'POST') {
       const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
       sendJson(res, 200, await apiDispatch('filePublish', body));
+      return;
+    }
+    if (p === '/api/file/data' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      sendJson(res, 200, await apiDispatch('fileData', body));
       return;
     }
     sendJson(res, 404, { error: 'Not found' });
