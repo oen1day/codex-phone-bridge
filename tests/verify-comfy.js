@@ -77,6 +77,8 @@ check('占位卡固定高度 180px', app.includes('width="320" height="200"') &&
 check('卡片内联样式兜底', app.includes('min-height:180px;') && app.includes("ph.style.cssText"));
 check('图片描述标签替代感叹号', app.includes('agent-img-tag') && app.includes("replace(/^!/, '')"));
 check('style 有图片描述标签', css.includes('.agent-img-tag'));
+check('查看器返回键接管', app.includes('history.pushState({ viewer: true }') && app.includes("addEventListener('popstate'"));
+check('纯图片消息不朗读', app.includes('updateSpeakBtnVisibility') && app.includes("clone.querySelectorAll('.agent-img')") && app.includes("spk.classList.toggle('hidden'"));
 check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - comfyStartTs)'));
 check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
 check('app 内置全屏查看器', app.includes('openImageViewerOverlay') && app.includes('viewerScale') && app.includes("('ontouchstart' in window)"));

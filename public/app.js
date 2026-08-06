@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.18';
+  const APP_VERSION = '10.19';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -744,6 +744,7 @@
       }
     }
     updateThinkingIndicator(state.running);
+    for (const el of messagesEl.querySelectorAll('.msg.agent')) updateSpeakBtnVisibility(el);
     // 分页未加载完整历史时跳过音频清理，避免误删未加载消息的缓存
     if (!state.threadPage.hasMore) pruneConvAudio(state.currentId, aiIds);
   }
@@ -1097,11 +1098,16 @@
     img.src = src;
     viewerOverlay.classList.remove('hidden');
     resetViewerTransform();
+    try { history.pushState({ viewer: true }, ''); } catch (_) {}
   }
 
   function closeViewerOverlay() {
     if (viewerOverlay) viewerOverlay.classList.add('hidden');
   }
+  // 手机返回键：查看器打开时优先关查看器（WebView goBack 触发 popstate）
+  window.addEventListener('popstate', () => {
+    if (viewerOverlay && !viewerOverlay.classList.contains('hidden')) closeViewerOverlay();
+  });
 
   // 图片区事件：保存按钮 / 生成图缓存到 App / 中继取图失败换 dataURL 或本地缓存
   messagesEl.addEventListener('click', (e) => {
@@ -1237,6 +1243,8 @@
       }
       block.classList.add('typing');
       block.textContent = (block.textContent || '') + deltaText(params);
+      const agentEl = block.closest ? block.closest('.msg.agent') : null;
+      if (agentEl) updateSpeakBtnVisibility(agentEl);
       scrollBottom();
     } else if (method === 'item/commandExecution/outputDelta') {
       let block = state.blocks.get(params.itemId);
@@ -1294,6 +1302,8 @@
       if (item.text && (!cur || item.text.length > cur.length)) block.textContent = item.text;
       if ((item.text || '').trim()) replySeen[state.turnId] = true;
       block.classList.add('agent-text');
+      const agentEl = block.closest ? block.closest('.msg.agent') : null;
+      if (agentEl) updateSpeakBtnVisibility(agentEl);
     } else if (item.type === 'commandExecution') {
       renderBlock(block, { kind: 'cmd', id: item.id, label: '正在执行电脑命令…', status: item.status || '', output: item.output || '', command: '' });
     } else if (item.type === 'fileChange') {
@@ -2162,10 +2172,21 @@
     const parts = [];
     const blocks = agentEl.querySelectorAll('.block.agent-text');
     for (const b of blocks) {
-      const t = (b.textContent || '').trim();
+      const clone = b.cloneNode(true);
+      clone.querySelectorAll('.agent-img').forEach(n => n.remove()); // 纯图片不参与朗读
+      const t = (clone.textContent || '').trim();
       if (t) parts.push(t);
     }
     return parts.join('\n');
+  }
+
+  // 纯图片消息隐藏“朗读”按钮（混合消息有文字则显示）
+  function updateSpeakBtnVisibility(agentEl) {
+    if (!agentEl) return;
+    const spk = agentEl.querySelector('.speak-btn');
+    if (!spk) return;
+    const hasText = collectAgentText(agentEl).length > 0;
+    spk.classList.toggle('hidden', !hasText);
   }
 
   function stopSpeaking() {
