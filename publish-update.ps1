@@ -79,7 +79,7 @@ function New-ReleaseZip {
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
   $items = @(
     'server.js', 'start.bat', 'start.ps1', 'build-apk.ps1',
-    'README.md', 'LICENSE', 'version.json', 'publish-update.ps1', 'public', 'android', 'comfy-workflows',
+    'README.md', 'LICENSE', 'version.json', 'publish-update.ps1', 'public', 'android', 'comfy-workflows', 'package.json', 'package-lock.json', 'node_modules',
     'CodexPhoneBridge.apk', 'phone-mcp.js', 'phone-tool.ps1', 'config.example.json',
     'wav2mp3.py'
   )
