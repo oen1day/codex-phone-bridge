@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.15';
+  const APP_VERSION = '10.16';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -1170,6 +1170,8 @@
     } else if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall' || item.type === 'webSearch') {
       const label = friendlyToolLabel(item);
       addBlock(agentEl, { kind: 'tool', id: item.id, label, status: '进行中' });
+      // 卡片双保险：comfyStarted 未到前，只要检测到 AI 在调 generate_image 就主动显示占位卡
+      if (/generate_image/i.test(String(item.tool || item.name || ''))) startComfyProgress();
     }
   }
 
@@ -1203,6 +1205,7 @@
       const label = item.type === 'webSearch' ? '搜索: ' + (item.query || '')
         : (item.type === 'mcpToolCall' ? (item.server || '') + ' → ' + (item.tool || '') : '工具: ' + (item.tool || ''));
       block.textContent = '🔧 ' + label + (item.status ? ' ｜ ' + item.status : '');
+      if (/generate_image/i.test(String(item.tool || item.name || ''))) finishComfyProgress();
     }
     scrollBottom();
   }
@@ -2525,6 +2528,7 @@
   function traceEvent(name) {
     const el = $('eventTrace');
     if (!el) return;
+    if (String(name || '').indexOf('comfy') !== 0) return; // 正式版只显示 comfy 相关调试事件
     el.classList.remove('hidden');
     const arr = (el.dataset.list || '').split(',').filter(Boolean);
     arr.push(name);

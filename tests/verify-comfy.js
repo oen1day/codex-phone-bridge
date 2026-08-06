@@ -78,6 +78,8 @@ check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - comfyStar
 check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
 check('app 点击图片全屏预览', app.includes('openImageViewer') && app.includes("tagName === 'IMG'"));
 check('app comfy 事件诊断日志', app.includes("console.log('[event] ' + method)") || app.includes('/^comfy/.test(method)'));
+check('事件日志只显示 comfy', app.includes("String(name || '').indexOf('comfy') !== 0"));
+check('卡片双保险：工具调用即显示', app.includes('/generate_image/i.test'));
 check('Java 有图片查看器', java.includes('openImageViewer') && java.includes('LocalFileProvider.AUTHORITY'));
 check('Manifest 注册本地 Provider', read('android/AndroidManifest.xml').includes('LocalFileProvider'));
 check('LocalFileProvider 文件存在', fs.existsSync(path.join(root, 'android/src/com/local/codexbridge/LocalFileProvider.java')));
