@@ -112,7 +112,8 @@ function loadConfig() {
     comfyAuthToken: '',
     comfyFirebaseRefreshToken: '',
     openaiApiKey: '',
-    imageProvider: 'comfy'
+    imageProvider: 'comfy',
+    httpsProxy: ''
   }, cfg);
   if (!merged.workspace) merged.workspace = docs;
   if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
@@ -125,11 +126,24 @@ function loadConfig() {
   if (!merged.comfyFirebaseRefreshToken) merged.comfyFirebaseRefreshToken = '';
   if (!merged.openaiApiKey) merged.openaiApiKey = '';
   if (merged.imageProvider !== 'openai') merged.imageProvider = 'comfy';
+  if (!merged.httpsProxy) merged.httpsProxy = '';
   return merged;
 }
 
 const config = loadConfig();
 const VERSION = '10.11';
+
+// ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
+try {
+  const undiciLib = require('undici');
+  const proxyUrl = config.httpsProxy || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+  if (proxyUrl) {
+    undiciLib.setGlobalDispatcher(new undiciLib.ProxyAgent({ uri: proxyUrl, noProxy: ['127.0.0.1', 'localhost'] }));
+    console.log('[config] 已启用 HTTP 代理: ' + proxyUrl + '（本地 127.0.0.1/localhost 不走代理）');
+  }
+} catch (e) {
+  console.error('[config] 代理初始化失败（不影响直连）: ' + (e && e.message));
+}
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -1185,16 +1199,25 @@ async function getComfyAuthToken() {
     if (comfyIdTokenCache.token && Date.now() < comfyIdTokenCache.expiresAt - 5 * 60 * 1000) {
       return comfyIdTokenCache.token;
     }
-    const r = await fetch('https://securetoken.googleapis.com/v1/token?key=' + COMFY_FIREBASE_API_KEY, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: config.comfyFirebaseRefreshToken })
-    });
-    if (!r.ok) throw new BusinessError('Comfy 登录令牌刷新失败（请重新复制 firebase 刷新令牌到 config.json）');
-    const data = await r.json();
-    if (!data.id_token) throw new BusinessError('Comfy 登录令牌刷新失败：未返回 id_token');
-    comfyIdTokenCache = { token: data.id_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
-    return data.id_token;
+    try {
+      const r = await fetch('https://securetoken.googleapis.com/v1/token?key=' + COMFY_FIREBASE_API_KEY, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: config.comfyFirebaseRefreshToken })
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      if (!data.id_token) throw new Error('未返回 id_token');
+      comfyIdTokenCache = { token: data.id_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
+      return data.id_token;
+    } catch (e) {
+      // 刷新失败时回退到临时 comfyAuthToken（1 小时有效），不直接中断生图
+      if (config.comfyAuthToken) {
+        console.error('[config] Comfy 令牌刷新失败，回退使用临时 comfyAuthToken: ' + (e && e.message));
+        return config.comfyAuthToken;
+      }
+      throw new BusinessError('Comfy 登录令牌刷新失败（网络或令牌问题），请重新复制 firebase 刷新令牌到 config.json');
+    }
   }
   if (config.comfyAuthToken) return config.comfyAuthToken;
   return null;
