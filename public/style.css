@@ -392,17 +392,28 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
 /* ---------- 系统行 / 加载 ---------- */
 .comfy-generating {
   position: relative;
-  max-width: 86%;
-  margin: 4px auto 12px;
-  order: 9999;
-  margin-top: auto;
-  flex: 0 0 auto;
   min-height: 180px;
   border-radius: var(--radius-md);
   overflow: hidden;
   border: 1px solid rgba(0, 210, 160, 0.25);
   background: var(--surface-deep);
   box-shadow: 0 0 18px rgba(0, 210, 160, 0.12);
+}
+.comfy-stack {
+  position: relative;
+  margin: 4px 0 12px;
+  max-width: 86%;
+  order: 9999;
+  margin-top: auto;
+}
+.comfy-stack .comfy-generating {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  margin: 0;
+  width: 100%;
+  transition: opacity .6s ease;
 }
 .comfy-placeholder {
   width: 100%;

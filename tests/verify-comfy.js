@@ -85,6 +85,9 @@ check('lanCall 超时控制', app.includes('AbortController') && app.includes('�
 check('style 图片占位与失败样式', css.includes('.img-fail-note') && css.includes('min-height: 180px') && css.includes('.img-broken'));
 check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - rec.startTs)'));
 check('多卡片队列', app.includes('comfyCards') && app.includes('排队中') && app.includes('promoteNextComfyCard'));
+check('纸张堆叠容器', app.includes('comfyStackEl') && app.includes('ensureComfyStack') && app.includes('reflowComfyStack') && css.includes('.comfy-stack'));
+check('堆叠层叠偏移与淡出', app.includes("left = (i * 8) + 'px'") && app.includes("rec.card.style.opacity = '0'") && app.includes('setTimeout(finishRemove, 600)'));
+check('下层半透明隐藏徽标', app.includes("'0.45'") && app.includes("badge.style.display = isTop ? '' : 'none'"));
 check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
 check('app 内置全屏查看器', app.includes('openImageViewerOverlay') && app.includes('viewerScale') && app.includes("('ontouchstart' in window)"));
 check('style 有查看器遮罩', css.includes('.viewer-overlay') && css.includes('touch-action: none'));

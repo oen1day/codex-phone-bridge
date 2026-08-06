@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.21';
+  const APP_VERSION = '10.22';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -1844,8 +1844,45 @@
     '<path d="M200 164 Q208 146 206 128 Q212 138 218 130 Q224 142 228 164 Z" fill="#7fd4bd" opacity="0.8"/>' +
     '</svg>';
 
-  const comfyCards = new Map(); // promptId -> { id, card, badge, timer, startTs, pct, state, seq }
+  const comfyCards = new Map(); // promptId -> { id, card, badge, timer, startTs, pct, state, seq, fading }
   let comfySeq = 0;
+  let comfyStackEl = null;
+
+  function ensureComfyStack() {
+    if (!comfyStackEl || !comfyStackEl.parentNode) {
+      comfyStackEl = document.createElement('div');
+      comfyStackEl.className = 'comfy-stack';
+      messagesEl.appendChild(comfyStackEl);
+    }
+    return comfyStackEl;
+  }
+
+  function removeComfyStackIfEmpty() {
+    if (comfyCards.size === 0 && comfyStackEl && comfyStackEl.parentNode) {
+      comfyStackEl.parentNode.removeChild(comfyStackEl);
+      comfyStackEl = null;
+    }
+  }
+
+  // 纸张堆叠布局：按加入顺序逐张向右下偏移 8px，最上层（生成中）不透明，
+  // 下层半透明只露边角、徽标隐藏；淡出中的卡保持透明直到被移除。
+  function reflowComfyStack() {
+    if (!comfyStackEl) return;
+    const recs = [...comfyCards.values()];
+    let top = null;
+    for (const c of recs) {
+      if (c.state === 'generating' && !c.fading) { top = c; break; }
+    }
+    recs.forEach((rec, i) => {
+      rec.card.style.left = (i * 8) + 'px';
+      rec.card.style.top = (i * 8) + 'px';
+      rec.card.style.zIndex = String(i + 1);
+      const isTop = rec === top;
+      rec.card.style.opacity = isTop ? '1' : (rec.fading ? '0' : '0.45');
+      if (rec.badge) rec.badge.style.display = isTop ? '' : 'none';
+    });
+    comfyStackEl.style.height = (recs.length > 0 ? ((recs.length - 1) * 8 + 180) : 0) + 'px';
+  }
 
   function updateComfyBadge(rec) {
     if (!rec || !rec.badge) return;
@@ -1860,17 +1897,18 @@
     if (comfyCards.has(id)) return;
     let generating = null;
     for (const c of comfyCards.values()) if (c.state === 'generating') { generating = c; break; }
+    const stack = ensureComfyStack();
     const card = document.createElement('div');
     card.className = 'comfy-generating';
     card.innerHTML = '<div class="comfy-placeholder">' + COMFY_PLACEHOLDER_SVG + '</div><div class="comfy-badge"></div>';
     // 内联样式兜底：绕过 CSS 缓存/flex 挤压，保证卡片高度不被压成 0
-    card.style.cssText = 'display:block; flex:0 0 auto; min-height:180px; margin:4px auto 12px; order:9999;';
+    card.style.cssText = 'display:block; flex:0 0 auto; min-height:180px;';
     const ph = card.querySelector('.comfy-placeholder');
     if (ph) ph.style.cssText = 'width:100%; height:180px; display:block;';
     const bd = card.querySelector('.comfy-badge');
     if (bd) bd.style.cssText = 'position:absolute; top:8px; left:8px;';
-    messagesEl.appendChild(card);
-    const rec = { id, card, badge: bd, timer: null, startTs: 0, pct: null, state: 'queued', seq: ++comfySeq };
+    stack.appendChild(card);
+    const rec = { id, card, badge: bd, timer: null, startTs: 0, pct: null, state: 'queued', seq: ++comfySeq, fading: false };
     comfyCards.set(id, rec);
     if (generating) {
       if (bd) bd.textContent = '排队中';
@@ -1880,6 +1918,7 @@
       updateComfyBadge(rec);
       rec.timer = setInterval(() => updateComfyBadge(rec), 1000);
     }
+    reflowComfyStack();
     scrollBottom();
   }
 
@@ -1893,27 +1932,38 @@
   function finishComfyProgress(id) {
     if (id == null) {
       // 兼容无 id：清空所有卡片
-      for (const rec of [...comfyCards.values()]) removeComfyCard(rec);
+      for (const rec of [...comfyCards.values()]) {
+        if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
+        if (rec.card && rec.card.parentNode) rec.card.parentNode.removeChild(rec.card);
+      }
+      comfyCards.clear();
+      removeComfyStackIfEmpty();
       return;
     }
     const rec = comfyCards.get(id);
     if (!rec) return;
     removeComfyCard(rec);
-    promoteNextComfyCard();
   }
 
   function removeComfyCard(rec) {
     if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
     const hasQueued = [...comfyCards.values()].some(c => c.state === 'queued');
-    const doRemove = () => {
+    const finishRemove = () => {
       if (rec.card && rec.card.parentNode) rec.card.parentNode.removeChild(rec.card);
       comfyCards.delete(rec.id);
-      if (!hasQueued) return;
       promoteNextComfyCard();
+      removeComfyStackIfEmpty();
+      reflowComfyStack();
     };
-    // 生成中卡最短可见约 1.5 秒（无排队时）；有排队则立即让下一张转生成
+    const startFade = () => {
+      if (!rec.card || !rec.card.parentNode) { finishRemove(); return; }
+      rec.fading = true;
+      rec.card.style.opacity = '0';
+      setTimeout(finishRemove, 600);
+    };
+    // 生成中卡最短可见约 1.5 秒（无排队时）；有排队则直接淡出让下一张上浮
     const wait = (!hasQueued && rec.state === 'generating') ? Math.max(0, 1500 - (Date.now() - rec.startTs)) : 0;
-    if (wait > 0) { setTimeout(doRemove, wait); } else { doRemove(); }
+    if (wait > 0) { setTimeout(startFade, wait); } else { startFade(); }
   }
 
   function promoteNextComfyCard() {
@@ -1925,8 +1975,10 @@
     next.state = 'generating';
     next.startTs = Date.now();
     next.pct = null;
+    next.fading = false;
     updateComfyBadge(next);
     next.timer = setInterval(() => updateComfyBadge(next), 1000);
+    reflowComfyStack();
   }
 
   // 把手机端能力开关状态告诉电脑（图像生成等能力在电脑侧执行前需要校验）
