@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.17';
+  const APP_VERSION = '10.18';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -904,11 +904,14 @@
     const parts = normalized.split(/!\[([^\]]*)\]\(([^)]+)\)/);
     let html = '';
     for (let i = 0; i < parts.length; i += 3) {
-      html += escapeHtml(parts[i] || '');
+      html += escapeHtml((parts[i] || '').replace(/^!/, '')); // 清掉解析残留的孤立感叹号
       if (parts[i + 1] !== undefined) {
         const src = parts[i + 2] || '';
+        const alt = (parts[i + 1] || '').trim() || '图片';
         const comfy = String(src).indexOf('/uploads/comfy-') === 0 ? ' data-comfy="1"' : '';
-        html += '<span class="agent-img"><img src="' + escapeHtml(src) + '" loading="lazy" data-save="' + escapeHtml(src) + '"' + comfy + '><button class="img-save-btn">保存到相册</button></span>';
+        html += '<span class="agent-img"><img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt) + '" loading="lazy" data-save="' + escapeHtml(src) + '"' + comfy + '>' +
+          '<span class="agent-img-tag">' + escapeHtml(alt) + '</span>' +
+          '<button class="img-save-btn">保存到相册</button></span>';
       }
     }
     return html;
@@ -1759,6 +1762,12 @@
     comfyCardEl = document.createElement('div');
     comfyCardEl.className = 'comfy-generating';
     comfyCardEl.innerHTML = '<div class="comfy-placeholder">' + COMFY_PLACEHOLDER_SVG + '</div><div class="comfy-badge"></div>';
+    // 内联样式兜底：绕过 CSS 缓存/flex 挤压，保证卡片高度不被压成 0
+    comfyCardEl.style.cssText = 'display:block; flex:0 0 auto; min-height:180px; margin:4px auto 12px; order:9999;';
+    const ph = comfyCardEl.querySelector('.comfy-placeholder');
+    if (ph) ph.style.cssText = 'width:100%; height:180px; display:block;';
+    const bd = comfyCardEl.querySelector('.comfy-badge');
+    if (bd) bd.style.cssText = 'position:absolute; top:8px; left:8px;';
     messagesEl.appendChild(comfyCardEl);
     comfyBadgeEl = comfyCardEl.querySelector('.comfy-badge');
     comfyStartTs = Date.now();

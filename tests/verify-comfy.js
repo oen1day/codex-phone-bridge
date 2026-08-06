@@ -74,6 +74,9 @@ check('Java 有 App 内缓存方法', java.includes('cacheImageToApp') && java.i
 check('Manifest 有低版本存储权限', read('android/AndroidManifest.xml').includes('WRITE_EXTERNAL_STORAGE'));
 const css = read('public/style.css');
 check('占位卡固定高度 180px', app.includes('width="320" height="200"') && css.includes('height: 180px'));
+check('卡片内联样式兜底', app.includes('min-height:180px;') && app.includes("ph.style.cssText"));
+check('图片描述标签替代感叹号', app.includes('agent-img-tag') && app.includes("replace(/^!/, '')"));
+check('style 有图片描述标签', css.includes('.agent-img-tag'));
 check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - comfyStartTs)'));
 check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
 check('app 内置全屏查看器', app.includes('openImageViewerOverlay') && app.includes('viewerScale') && app.includes("('ontouchstart' in window)"));

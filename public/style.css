@@ -396,6 +396,8 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   margin: 4px auto 12px;
   order: 9999;
   margin-top: auto;
+  flex: 0 0 auto;
+  min-height: 180px;
   border-radius: var(--radius-md);
   overflow: hidden;
   border: 1px solid rgba(0, 210, 160, 0.25);
@@ -432,8 +434,23 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   pointer-events: none;
   white-space: nowrap;
 }
-.agent-img { display: inline-block; max-width: 100%; margin: 6px 0; }
+.agent-img { position: relative; display: inline-block; max-width: 100%; margin: 6px 0; }
 .agent-img img { display: block; max-width: 100%; max-height: 320px; border-radius: var(--radius-sm); border: 1px solid rgba(0, 210, 160, 0.25); }
+.agent-img-tag {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--primary-bright);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .img-save-btn {
   margin-top: 4px;
   height: 1.4em; line-height: 1.4em;
