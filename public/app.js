@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.25';
+  const APP_VERSION = '10.26';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -746,6 +746,7 @@
       const rcBtn = failEl.querySelector('#reconnectThreadBtn');
       if (rcBtn) rcBtn.addEventListener('click', () => { failEl.remove(); reconnectAll(); });
       showToast('读取对话失败: ' + msg, true);
+      handleUnresponsive(e); // 超时/断连时探活，真无响应则提示自动重启
     }
   }
 
@@ -792,6 +793,7 @@
     } catch (e) {
       state.threadPage.loading = false;
       showToast('加载更多历史失败: ' + ((e && e.message) || e), true);
+      handleUnresponsive(e);
     }
   }
 
@@ -1202,14 +1204,60 @@
           const h = await fetch('/api/health', { cache: 'no-store' });
           if (h.ok) { location.reload(); return; }
         } catch (_) {}
-        showToast('电脑端无响应，请重启电脑端 start.bat', true);
-        setStatus('电脑端无响应，请重启 start.bat', true);
+        startAutoRecovery();
       });
       scrollBottom();
     }, (sec || 60) * 1000);
   }
   function cancelTurnFallback() {
     if (turnFallbackTimer) { clearTimeout(turnFallbackTimer); turnFallbackTimer = null; }
+  }
+
+  // 电脑端假死自动恢复：显示“正在自动重启”，每 5 秒探活，恢复后重连并重载历史
+  let autoRecoveryTimer = null;
+  function startAutoRecovery() {
+    if (autoRecoveryTimer) return;
+    setStatus('电脑端无响应，正在自动重启（约 30 秒）…', true);
+    showToast('电脑端无响应，正在自动重启（约 30 秒）…', true);
+    autoRecoveryTimer = setInterval(async () => {
+      let ok = false;
+      try {
+        if (relayCfg) {
+          stopAllRelayChannels();
+          relayChannel = null;
+          await connectRelay();
+          ok = true;
+        } else {
+          const ctl = new AbortController();
+          const to = setTimeout(() => ctl.abort(), 4000);
+          const h = await fetch('/api/health', { cache: 'no-store', signal: ctl.signal });
+          clearTimeout(to);
+          ok = h.ok;
+        }
+      } catch (_) { ok = false; }
+      if (!ok) return;
+      clearInterval(autoRecoveryTimer);
+      autoRecoveryTimer = null;
+      setStatus('电脑端已恢复，正在重连…');
+      reconnectAll();
+    }, 5000);
+  }
+
+  // 请求超时/断连后先探活：电脑端还活着（只是慢）不打扰；真无响应才进入自动恢复
+  async function handleUnresponsive(e) {
+    if (relayCfg) return false; // 中继模式走既有重连逻辑
+    if (!isTransientThreadErr((e && e.message) || '')) return false;
+    try {
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 4000);
+      const h = await fetch('/api/health', { cache: 'no-store', signal: ctl.signal });
+      clearTimeout(to);
+      if (!h.ok) throw new Error('health');
+      return false;
+    } catch (_) {
+      startAutoRecovery();
+      return true;
+    }
   }
 
   // 电脑端探活 + 全链路重连：SSE / 中继 / 会话列表 / 当前对话
@@ -1730,6 +1778,7 @@
       setStatus('发送失败: ' + e.message, true);
       showToast('发送失败: ' + e.message, true);
       clearComfyCards();
+      handleUnresponsive(e);
     }
   }
 
@@ -1931,7 +1980,12 @@
       rec.card.style.left = (slot * 8) + 'px';
       rec.card.style.top = (slot * 8) + 'px';
       rec.card.style.zIndex = isTop ? String(recs.length + 1) : String(slot + 1);
-      rec.card.style.opacity = isTop ? '1' : '0.45';
+      // 下层不透明：层级感靠边框/阴影表达，边框逐层变暗、阴影逐层加重
+      rec.card.style.opacity = '1';
+      rec.card.style.borderColor = 'rgba(0,210,160,' + Math.max(0.25, 0.6 - slot * 0.09).toFixed(2) + ')';
+      rec.card.style.boxShadow = isTop
+        ? '0 0 18px rgba(0,210,160,0.12)'
+        : '0 ' + (slot * 2) + 'px ' + (4 + slot * 2) + 'px rgba(0,0,0,0.45)';
       if (rec.badge) rec.badge.style.display = isTop ? '' : 'none';
     }
     comfyStackEl.style.height = (recs.length > 0 ? ((recs.length - 1) * 8 + 180) : 0) + 'px';
@@ -2137,8 +2191,9 @@
     const startSink = () => {
       if (!rec.card || !rec.card.parentNode) { finishState(); return; }
       rec.fading = true;
-      rec.card.style.transition = 'opacity .5s ease, left .5s ease, top .5s ease';
-      rec.card.style.opacity = '0.45';
+      rec.card.style.transition = 'opacity .5s ease, left .5s ease, top .5s ease, border-color .5s ease';
+      rec.card.style.opacity = '1';
+      rec.card.style.borderColor = 'rgba(0,210,160,0.5)';
       // 下一张同时从背后上浮到顶层（位置/不透明度/缩放连续过渡）
       const next = findNextQueued();
       if (next) {

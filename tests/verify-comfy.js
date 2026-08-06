@@ -87,7 +87,7 @@ check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - rec.start
 check('多卡片队列', app.includes('comfyCards') && app.includes('排队中') && app.includes('promoteNextComfyCard'));
 check('纸张堆叠容器', app.includes('comfyStackEl') && app.includes('ensureComfyStack') && app.includes('reflowComfyStack') && css.includes('.comfy-stack'));
 check('堆叠层叠偏移', app.includes("left = (slot * 8) + 'px'") && app.includes('let nonTopSlot = top ? 1 : 0'));
-check('下层半透明隐藏徽标', app.includes("'0.45'") && app.includes("badge.style.display = isTop ? '' : 'none'"));
+check('下层不透明+边框阴影分层', app.includes("rec.card.style.opacity = '1'") && app.includes('borderColor') && app.includes('boxShadow') && app.includes("badge.style.display = isTop ? '' : 'none'"));
 check('预创建：解析数量词', app.includes('function parseChineseNum(') && app.includes('张|个|种|版|套') && app.includes('Math.min(n, 9)') && app.includes("state: i === 0 ? 'generating' : 'queued'"));
 check('预创建：发送时立即建叠', app.includes('parseImageCount(sendText)') && app.includes("if (preCount >= 2) precreateComfyStack(preCount)"));
 check('预创建池绑定', app.includes('function bindComfyCard(') && app.includes('!rec.bound') && app.includes('function comfyFind('));
@@ -111,7 +111,10 @@ check('卡片双保险：工具调用即显示', app.includes('/generate_image/i
 check('gptimage2 事件带 promptId', server.includes("method: 'comfyDone', params: { promptId }") && server.includes("method: 'comfyError', params: { promptId, error"));
 check('server 有 health', server.includes("'/api/health'"));
 check('server 有慢请求日志', server.includes("[slow] ' + req.method"));
-check('server 有 turn 看门狗', server.includes('turn/failed') && server.includes('5 * 60 * 1000'));
+check('server 有 turn 看门狗 90 秒', server.includes('turn/failed') && server.includes('90 * 1000') && server.includes('15000'));
+check('server 事件循环看门狗', server.includes('lastHeartbeatAt') && server.includes('gap > 30000') && server.includes('process.exit(1)'));
+check('server idle 诊断日志', server.includes('[idle] turn') && server.includes('lastCodexOutputAt') && server.includes('30000'));
+check('前端自动重启恢复', app.includes('function startAutoRecovery()') && app.includes('电脑端无响应，正在自动重启') && app.includes('function handleUnresponsive(') && app.includes("fetch('/api/health', { cache: 'no-store', signal: ctl.signal })"));
 check('前端全链路重连', app.includes('function reconnectAll()') && app.includes('reconnectThreadBtn'));
 check('Java 有图片查看器', java.includes('openImageViewer') && java.includes('LocalFileProvider.AUTHORITY'));
 check('Manifest 注册本地 Provider', read('android/AndroidManifest.xml').includes('LocalFileProvider'));

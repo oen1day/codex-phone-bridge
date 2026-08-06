@@ -131,7 +131,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.25';
+const VERSION = '10.26';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -394,6 +394,7 @@ function handleServerMessage(msg) {
   }
   if (params.turnId && params.threadId) turnThreads.set(params.turnId, params.threadId);
   turnLastEventAt = Date.now();
+  lastCodexOutputAt = Date.now();
   if (msg.method === 'turn/completed' || msg.method === 'turn/error') {
     activeTurn = null;
   }
@@ -465,16 +466,40 @@ const relayPhones = new Map();
 const turnThreads = new Map();
 let activeTurn = null;
 let turnLastEventAt = Date.now();
+let lastCodexOutputAt = Date.now();
 
-// turn 看门狗：5 分钟无任何事件 → 自动中断 codex 子进程并广播失败，界面可自恢复
+// 事件循环看门狗：心跳间隔超过 30 秒说明事件循环被阻塞（server 假死），
+// 记录日志后退出，让 start.ps1 自动拉起，手机端 SSE 自动重连恢复
+let lastHeartbeatAt = Date.now();
+setInterval(() => {
+  const now = Date.now();
+  const gap = now - lastHeartbeatAt;
+  lastHeartbeatAt = now;
+  if (gap > 30000) {
+    console.error('[watchdog] 事件循环阻塞 ' + gap + 'ms，触发自动重启');
+    try { logBridge('[watchdog] 事件循环阻塞 ' + gap + 'ms，process.exit(1)'); } catch (_) {}
+    process.exit(1);
+  }
+}, 10000);
+
+// turn 看门狗：90 秒无任何事件 → 自动中断 codex 子进程并广播失败，界面可自恢复
 setInterval(() => {
   if (!activeTurn) return;
-  if (Date.now() - turnLastEventAt < 5 * 60 * 1000) return;
+  if (Date.now() - turnLastEventAt < 90 * 1000) return;
   const t = activeTurn;
   activeTurn = null;
   console.log('[slow] turn 超时中断: ' + t.threadId + '/' + t.turnId);
   getClient().then(cl => cl.call('turn/interrupt', { threadId: t.threadId, turnId: t.turnId })).catch(() => {});
   broadcast({ type: 'notification', method: 'turn/failed', params: { threadId: t.threadId, turnId: t.turnId, error: '电脑端回复超时已停止' } });
+}, 15000);
+
+// codex 子进程空闲诊断：30 秒无任何输出时打日志，区分“子进程卡”还是“转发卡”
+setInterval(() => {
+  if (!activeTurn) return;
+  const idleMs = Date.now() - lastCodexOutputAt;
+  if (idleMs >= 30000) {
+    console.log('[idle] turn ' + activeTurn.turnId + ' 无输出 ' + Math.floor(idleMs / 1000) + ' 秒');
+  }
 }, 30000);
 
 // 只更新 config.json 的单个字段，绝不整体覆盖，避免清掉用户手填的配置（如 comfyFirebaseRefreshToken）
