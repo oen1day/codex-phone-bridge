@@ -24,5 +24,6 @@
   "comfyInputDir": "",
   "comfyApiKey": "",
   "comfyAuthToken": "",
-  "comfyFirebaseRefreshToken": ""
+  "comfyFirebaseRefreshToken": "",
+  "openaiApiKey": ""
 }

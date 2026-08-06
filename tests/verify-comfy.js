@@ -44,10 +44,15 @@ check('MCP 有 generate_image', mcp.includes("name: 'generate_image'"));
 check('MCP 默认 gptimage2', mcp.includes("args.workflow || 'gptimage2'"));
 check('MCP 描述强调默认 gptimage2', mcp.includes('除非用户明确要求使用本地 z-image 生成'));
 check('server 默认 gptimage2', server.includes("params.workflow || 'gptimage2'"));
+check('server gptimage2 直连 OpenAI', server.includes('async function openaiGenerate(') && server.includes('api.openai.com/v1/images/generations') && server.includes('api.openai.com/v1/images/edits') && server.includes('return await openaiGenerate(params)'));
+check('server 读取 openaiApiKey', server.includes("config.openaiApiKey || process.env.OPENAI_API_KEY"));
+check('server 错误翻译完整', server.includes('OpenAI API Key 无效或未授权') && server.includes('OpenAI 限流或额度不足'));
+check('server 尺寸默认横图 1536x1024', server.includes("return '1536x1024'"));
 check('MainActivity 有图像生成开关', java.includes('KEY_CAP_IMAGE_GEN') && java.includes('图像生成（ComfyUI'));
 check('config.example 有 comfyUrl', cfg.includes('comfyUrl'));
 check('config.example 有 comfyApiKey', cfg.includes('comfyApiKey'));
 check('config.example 有 comfyFirebaseRefreshToken', cfg.includes('comfyFirebaseRefreshToken'));
+check('config.example 有 openaiApiKey', cfg.includes('openaiApiKey'));
 const css = read('public/style.css');
 check('style.css 有占位卡片样式', css.includes('.comfy-generating') && css.includes('.comfy-placeholder') && css.includes('.comfy-badge') && css.includes('comfy-breathe'));
 

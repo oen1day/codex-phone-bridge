@@ -109,7 +109,8 @@ function loadConfig() {
     comfyInputDir: '',
     comfyApiKey: '',
     comfyAuthToken: '',
-    comfyFirebaseRefreshToken: ''
+    comfyFirebaseRefreshToken: '',
+    openaiApiKey: ''
   }, cfg);
   if (!merged.workspace) merged.workspace = docs;
   if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
@@ -120,6 +121,7 @@ function loadConfig() {
   if (!merged.comfyApiKey) merged.comfyApiKey = '';
   if (!merged.comfyAuthToken) merged.comfyAuthToken = '';
   if (!merged.comfyFirebaseRefreshToken) merged.comfyFirebaseRefreshToken = '';
+  if (!merged.openaiApiKey) merged.openaiApiKey = '';
   return merged;
 }
 
@@ -1204,12 +1206,125 @@ function findComfyInputDir() {
   return cands.find(p => fs.existsSync(p)) || '';
 }
 
+const OPENAI_IMAGE_MODELS = ['gpt-image-1', 'gpt-image-1.5', 'gpt-image-2'];
+const OPENAI_SIZES = ['auto', '1024x1024', '1024x1536', '1536x1024', '2048x2048', '2048x1152', '1152x2048', '3840x2160', '2160x3840'];
+
+// 读取图片参数：支持 dataURL、本机绝对路径、/uploads/ 路径
+function readImageFile(imageSrc) {
+  let buf = null;
+  let ext = '.png';
+  if (/^data:/i.test(String(imageSrc))) {
+    const m = /^data:([^;]+);base64,(.*)$/s.exec(imageSrc);
+    if (m) {
+      buf = Buffer.from(m[2], 'base64');
+      if (/jpeg/i.test(m[1])) ext = '.jpg';
+      else if (/webp/i.test(m[1])) ext = '.webp';
+    }
+  } else {
+    const p = String(imageSrc).replace(/^\/+/, '');
+    const candidate = path.isAbsolute(p) ? p : path.join(ROOT, p);
+    if (fs.existsSync(candidate)) {
+      buf = fs.readFileSync(candidate);
+      const fext = path.extname(candidate).toLowerCase();
+      if (fext === '.jpg' || fext === '.jpeg' || fext === '.png' || fext === '.webp') ext = fext === '.jpeg' ? '.jpg' : fext;
+    }
+  }
+  return buf ? { buf, ext } : null;
+}
+
+function normalizeOpenAISize(width, height, size) {
+  if (size && OPENAI_SIZES.includes(String(size))) return String(size);
+  if (width && height) {
+    const w = Number(width);
+    const h = Number(height);
+    if (Number.isInteger(w) && Number.isInteger(h) && w > 0 && h > 0) {
+      const ratio = w / h;
+      const cands = ['1024x1024', '1536x1024', '1024x1536', '2048x1152', '1152x2048', '3840x2160', '2160x3840'];
+      let best = null;
+      let bestErr = Infinity;
+      for (const c of cands) {
+        const [cw, ch] = c.split('x').map(Number);
+        const err = Math.abs(Math.log(ratio / (cw / ch)));
+        if (err < bestErr) { bestErr = err; best = c; }
+      }
+      if (best && bestErr < 0.7) return best;
+      return 'auto'; // 比例差异过大，交给 OpenAI 自动判断
+    }
+  }
+  return '1536x1024'; // 默认横图
+}
+
+// gptimage2 直连 OpenAI 官方 API（不走 Comfy 云端节点，无需 Comfy 账号/积分）
+async function openaiGenerate(params) {
+  const apiKey = config.openaiApiKey || process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new BusinessError('未配置 OPENAI_API_KEY，请在 config.json 的 openaiApiKey 或环境变量中配置');
+  const prompt = String(params.prompt || '').trim();
+  if (!prompt) throw new BusinessError('缺少提示词 prompt');
+  const model = String(params.model || 'gpt-image-2');
+  if (!OPENAI_IMAGE_MODELS.includes(model)) throw new BusinessError('不支持的模型: ' + model);
+  const size = normalizeOpenAISize(params.width, params.height, params.size);
+  const quality = String(params.quality || 'auto');
+  const promptId = crypto.randomBytes(8).toString('hex');
+  broadcast({ type: 'notification', method: 'comfyStarted', params: { workflow: 'gptimage2', startedAt: Date.now() } });
+  try {
+    let res;
+    const imageSrc = params.imagePath || params.image;
+    if (imageSrc) {
+      const img = readImageFile(imageSrc);
+      if (!img) throw new BusinessError('无法读取图片: ' + String(imageSrc).slice(0, 80));
+      const fd = new FormData();
+      fd.append('model', model);
+      fd.append('prompt', prompt);
+      fd.append('n', '1');
+      fd.append('size', size);
+      fd.append('quality', quality);
+      fd.append('response_format', 'b64_json');
+      fd.append('image', new Blob([img.buf], { type: 'image/png' }), 'image' + img.ext);
+      res = await fetch('https://api.openai.com/v1/images/edits', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + apiKey },
+        body: fd
+      });
+    } else {
+      res = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+        body: JSON.stringify({ model, prompt, n: 1, size, quality, response_format: 'b64_json' })
+      });
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const rawMsg = (data && data.error && data.error.message) || ('HTTP ' + res.status);
+      let msg;
+      if (res.status === 401 || res.status === 403) msg = 'OpenAI API Key 无效或未授权';
+      else if (res.status === 429) msg = 'OpenAI 限流或额度不足';
+      else if (res.status === 400) msg = 'OpenAI 生图失败: ' + rawMsg;
+      else msg = 'OpenAI 生图失败: ' + rawMsg;
+      throw new BusinessError(msg);
+    }
+    const b64 = data && data.data && data.data[0] && data.data[0].b64_json;
+    if (!b64) throw new BusinessError('OpenAI 未返回图片数据');
+    const id = crypto.randomBytes(8).toString('hex');
+    const file = path.join(UPLOAD_DIR, 'comfy-' + id + '.png');
+    fs.writeFileSync(file, Buffer.from(b64, 'base64'));
+    broadcast({ type: 'notification', method: 'comfyDone', params: {} });
+    return { ok: true, path: file, url: '/uploads/comfy-' + id + '.png', workflow: 'gptimage2', promptId };
+  } catch (e) {
+    broadcast({ type: 'notification', method: 'comfyError', params: { error: (e && e.message) || '未知错误' } });
+    throw e;
+  }
+}
+
 async function comfyGenerate(params) {
   const caps = phoneCapsCache || {};
   if (!caps.image_generation) throw new BusinessError('图像生成未开启，请先在手机设置里开启');
   const workflow = String(params.workflow || 'gptimage2');
   const file = COMFY_WORKFLOWS[workflow];
   if (!file) throw new BusinessError('未知工作流: ' + workflow);
+  // gptimage2 直连 OpenAI 官方 API，不再提交本地 ComfyUI
+  if (workflow === 'gptimage2') {
+    return await openaiGenerate(params);
+  }
   const prompt = String(params.prompt || '').trim();
   if (!prompt) throw new BusinessError('缺少提示词 prompt');
   const wfDir = config.comfyWorkflows || path.join(ROOT, 'comfy-workflows');
