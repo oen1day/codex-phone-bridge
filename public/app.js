@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.32';
+  const APP_VERSION = '10.33';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -947,8 +947,9 @@
             '<button class="img-save-btn">保存到相册</button></span>';
         } else {
           const fname = (alt === '图片' ? (src.split('/').pop() || '文件') : alt);
+          const opened = isFileDownloaded(src);
           html += '<span class="agent-file"><span class="agent-file-ico">📄</span><span class="agent-file-name">' + escapeHtml(fname) + '</span>' +
-            '<button class="agent-file-btn" data-url="' + escapeHtml(src) + '" data-name="' + escapeHtml(fname) + '">下载</button></span>';
+            '<button class="agent-file-btn' + (opened ? ' open' : '') + '" data-url="' + escapeHtml(src) + '" data-name="' + escapeHtml(fname) + '">' + (opened ? '打开' : '下载') + '</button></span>';
         }
       }
     }
@@ -1001,7 +1002,8 @@
       if (window.AndroidBridge && window.AndroidBridge.saveFileToPhone) {
         const r = window.AndroidBridge.saveFileToPhone(abs, name || 'file');
         if (r === 'ok') {
-          showToast('已下载到手机');
+          markFileDownloaded(url);
+          setFileBtnOpen(url);
           return;
         }
         const msg = r || '未知错误';
@@ -1017,6 +1019,47 @@
       showToast('已开始下载');
     } catch (e) {
       showToast('下载失败: ' + (e && e.message), true);
+    }
+  }
+
+  // 已下载状态（localStorage 持久化，key = 文件 url），刷新/重进对话后按钮仍显示“打开”
+  function getDownloadedFiles() {
+    try { return new Set(JSON.parse(localStorage.getItem('downloadedFiles') || '[]')); } catch (_) { return new Set(); }
+  }
+  function isFileDownloaded(url) {
+    return url ? getDownloadedFiles().has(url) : false;
+  }
+  function markFileDownloaded(url) {
+    if (!url) return;
+    const s = getDownloadedFiles();
+    s.add(url);
+    try { localStorage.setItem('downloadedFiles', JSON.stringify(Array.from(s))); } catch (_) {}
+  }
+  function setFileBtnOpen(url) {
+    document.querySelectorAll('.agent-file-btn').forEach(b => {
+      if (b.getAttribute('data-url') === url) {
+        b.classList.add('open');
+        b.textContent = '打开';
+      }
+    });
+  }
+
+  // 打开已下载的 AI 文件：手机走原生 openFile（本地缺失会先下载），电脑网页新标签打开
+  function openAgentFile(url, name) {
+    if (!url) return;
+    let abs = url;
+    if (abs.indexOf('/') === 0 && abs.indexOf('//') !== 0 && !/^data:/.test(abs)) {
+      try { abs = location.origin + abs; } catch (_) {}
+    }
+    try {
+      if (window.AndroidBridge && window.AndroidBridge.openFile) {
+        const r = window.AndroidBridge.openFile(abs, name || 'file');
+        if (r !== 'ok') showToast('打开失败: ' + (r || '未知错误'), true);
+        return;
+      }
+      window.open(abs, '_blank');
+    } catch (e) {
+      showToast('打开失败: ' + (e && e.message), true);
     }
   }
 
@@ -1046,7 +1089,8 @@
       if (window.AndroidBridge && window.AndroidBridge.saveFileToPhone) {
         const r = window.AndroidBridge.saveFileToPhone(dataUrl, fname);
         if (r === 'ok') {
-          showToast('已下载到手机');
+          markFileDownloaded(url);
+          setFileBtnOpen(url);
           return;
         }
         throw new Error(r || '保存失败');
@@ -1231,7 +1275,8 @@
     if (fbtn) {
       const url = fbtn.getAttribute('data-url') || '';
       const name = fbtn.getAttribute('data-name') || '文件';
-      downloadAgentFile(url, name);
+      if (fbtn.classList.contains('open')) openAgentFile(url, name);
+      else downloadAgentFile(url, name);
       return;
     }
     const btn = e.target && e.target.closest ? e.target.closest('.img-save-btn') : null;

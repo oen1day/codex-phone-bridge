@@ -161,6 +161,13 @@ check('server 分片只允许 pub-*', server.includes('pub-[A-Za-z0-9._-]+') && 
 check('server 分片返回元信息', server.includes('params.meta') && server.includes('chunks: total') && server.includes('chunkBytes'));
 check('server 分片读取 base64', server.includes('buf.toString(\'base64\')') && server.includes('fs.readSync'));
 check('server 文件数据 HTTP 端点', server.includes("'/api/file/data'"));
+check('app 下载状态持久化', app.includes('downloadedFiles') && app.includes('function isFileDownloaded(') && app.includes('function markFileDownloaded(') && app.includes('function setFileBtnOpen('));
+check('app 下载成功按钮变打开', app.includes("agent-file-btn' + (opened ? ' open' : '')") && app.includes("(opened ? '打开' : '下载')"));
+check('app 点击打开已下载文件', app.includes("fbtn.classList.contains('open')") && app.includes('function openAgentFile(') && app.includes('AndroidBridge.openFile'));
+check('style 打开按钮高亮', css.includes('.agent-file-btn.open'));
+check('Java 有 openFile 方法', java.includes('public String openFile(') && java.includes('LocalFileProvider.AUTHORITY') && java.includes('Intent.createChooser'));
+check('Java 保存到公共 Downloads', java.includes('MediaStore.Downloads') && java.includes('DIRECTORY_DOWNLOADS') && java.includes('getExternalStoragePublicDirectory'));
+check('LocalFileProvider 服务下载目录', read('android/src/com/local/codexbridge/LocalFileProvider.java').includes('"downloads/" + name') && read('android/src/com/local/codexbridge/LocalFileProvider.java').includes('MimeTypeMap'));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

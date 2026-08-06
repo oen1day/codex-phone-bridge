@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.32";
+    private static final String APP_VERSION = "10.33";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -361,11 +361,21 @@ public class MainActivity extends Activity {
             }
         }
 
-        // 下载 AI 生成/修改的文件到 App 私有下载目录（局域网直下 http；dataURL 备用）
+        // 下载 AI 生成/修改的文件：存到系统公共 Downloads（App 私有目录留缓存副本），Toast 显示完整路径
         @JavascriptInterface
         public String saveFileToPhone(String url, String filename) {
             try {
                 if (url == null || url.isEmpty()) return "空地址";
+                if (Build.VERSION.SDK_INT < 29) {
+                    if (checkSelfPermission("android.permission.WRITE_EXTERNAL_STORAGE") != PackageManager.PERMISSION_GRANTED) {
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                requestPermissions(new String[]{"android.permission.WRITE_EXTERNAL_STORAGE"}, 2004);
+                            }
+                        });
+                        return "需要存储权限，请在系统弹窗允许后重试";
+                    }
+                }
                 byte[] data;
                 if (url.startsWith("data:")) {
                     String b64 = url.substring(url.indexOf(',') + 1);
@@ -412,16 +422,88 @@ public class MainActivity extends Activity {
                 java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
                 fos.write(data);
                 fos.close();
-                final String shown = safe;
+                String publicPath;
+                if (Build.VERSION.SDK_INT >= 29) {
+                    ContentValues cv = new ContentValues();
+                    cv.put(MediaStore.Downloads.DISPLAY_NAME, safe);
+                    cv.put(MediaStore.Downloads.MIME_TYPE, mimeFor(safe));
+                    cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                    android.net.Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                    if (uri == null) return "保存到公共下载目录失败：无法创建条目";
+                    java.io.OutputStream os = getContentResolver().openOutputStream(uri);
+                    if (os == null) return "保存到公共下载目录失败：无法打开条目";
+                    os.write(data);
+                    os.close();
+                    String real = null;
+                    android.database.Cursor cur = getContentResolver().query(uri, new String[]{MediaStore.MediaColumns.DATA}, null, null, null);
+                    if (cur != null) {
+                        if (cur.moveToFirst()) real = cur.getString(0);
+                        cur.close();
+                    }
+                    publicPath = real != null ? real : new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), safe).getAbsolutePath();
+                } else {
+                    File pubDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                    if (!pubDir.exists()) pubDir.mkdirs();
+                    File pf = new File(pubDir, safe);
+                    java.io.FileOutputStream pfos = new java.io.FileOutputStream(pf);
+                    pfos.write(data);
+                    pfos.close();
+                    publicPath = pf.getAbsolutePath();
+                }
+                final String shown = publicPath;
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
-                        Toast.makeText(MainActivity.this, "已下载到手机：" + shown, Toast.LENGTH_SHORT).show();
+                        Toast.makeText(MainActivity.this, "已下载到手机：" + shown, Toast.LENGTH_LONG).show();
                     }
                 });
                 return "ok";
             } catch (Exception e) {
                 return e.getMessage() == null ? e.toString() : e.getMessage();
             }
+        }
+
+        // 打开已下载的 AI 文件：优先本地缓存，缺失则先下载再打开；通过 LocalFileProvider 交给系统选择应用
+        @JavascriptInterface
+        public String openFile(String url, String filename) {
+            try {
+                if (filename == null || filename.isEmpty()) return "空文件名";
+                String safe = filename.replaceAll("[\\\\/:*?\"<>|\\r\\n]", "_").trim();
+                if (safe.isEmpty()) safe = "file_" + System.currentTimeMillis();
+                if (!safe.contains(".")) safe = safe + ".bin";
+                File dir = new File(getFilesDir(), "downloads");
+                if (!dir.exists()) dir.mkdirs();
+                File f = new File(dir, safe);
+                if (!f.exists()) {
+                    String r = saveFileToPhone(url, safe);
+                    if (!"ok".equals(r)) return r;
+                }
+                final String mime = mimeFor(safe);
+                final android.net.Uri uri = android.net.Uri.parse("content://" + LocalFileProvider.AUTHORITY + "/" + safe);
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        try {
+                            Intent i = new Intent(Intent.ACTION_VIEW);
+                            i.setDataAndType(uri, mime);
+                            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            startActivity(Intent.createChooser(i, "打开文件"));
+                        } catch (Exception ex) {
+                            Toast.makeText(MainActivity.this, "打开失败: " + (ex.getMessage() == null ? ex.toString() : ex.getMessage()), Toast.LENGTH_LONG).show();
+                        }
+                    }
+                });
+                return "ok";
+            } catch (Exception e) {
+                return e.getMessage() == null ? e.toString() : e.getMessage();
+            }
+        }
+
+        private String mimeFor(String name) {
+            int dot = name.lastIndexOf('.');
+            if (dot >= 0) {
+                String m = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substring(dot + 1).toLowerCase());
+                if (m != null) return m;
+            }
+            return "application/octet-stream";
         }
 
         // 全屏预览图片：http 直接打开；dataURL/本地缓存先落临时文件再走 content://

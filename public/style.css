@@ -532,6 +532,7 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   font-family: inherit;
 }
 .agent-file-btn:active { opacity: 0.8; }
+.agent-file-btn.open { background: var(--primary-bright); color: #06231C; }
 .img-save-btn {
   display: block;
   margin-top: 4px;
