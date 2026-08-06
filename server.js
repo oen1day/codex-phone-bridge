@@ -131,7 +131,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.27';
+const VERSION = '10.28';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -2107,7 +2107,14 @@ async function handleApi(req, res, url) {
         const r = readTtsStreamFrames(
           body.text,
           lanJob,
-          (frame) => { try { res.write(frame); } catch (_) {} },
+          (frame) => {
+            try {
+              // 与前端 consumeLanTtsStream 协议对齐：4 字节小端长度头 + 帧数据
+              const head = Buffer.alloc(4);
+              head.writeUInt32LE(frame.length, 0);
+              res.write(Buffer.concat([head, frame]));
+            } catch (_) {}
+          },
           () => { try { res.end(); } catch (_) {} }
         );
         await r.task;

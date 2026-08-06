@@ -118,6 +118,7 @@ check('前端自动重启恢复', app.includes('function startAutoRecovery()') &
 check('TTS 超时缩至 90 秒', server.includes('ttsTimeoutMs: 90000') && server.includes('90 * 1000') && !server.includes('12 * 60 * 1000'));
 check('TTS 繁忙/超时错误翻译', server.includes('语音服务繁忙，请稍后重试') && server.includes('语音生成超时') && server.includes('r.status === 409') && server.includes('r.status === 504'));
 check('网页朗读实时优先', server.includes("cancelPreGen(); // 网页朗读同样是实时请求"));
+check('局域网流式补 4 字节长度头', server.includes('head.writeUInt32LE(frame.length, 0)') && server.includes('Buffer.concat([head, frame])') && server.includes('与前端 consumeLanTtsStream 协议对齐'));
 check('前端全链路重连', app.includes('function reconnectAll()') && app.includes('reconnectThreadBtn'));
 check('Java 有图片查看器', java.includes('openImageViewer') && java.includes('LocalFileProvider.AUTHORITY'));
 check('Manifest 注册本地 Provider', read('android/AndroidManifest.xml').includes('LocalFileProvider'));
