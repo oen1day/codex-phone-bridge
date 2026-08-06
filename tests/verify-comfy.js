@@ -79,6 +79,10 @@ check('图片描述标签替代感叹号', app.includes('agent-img-tag') && app.
 check('style 有图片描述标签', css.includes('.agent-img-tag'));
 check('查看器返回键接管', app.includes('history.pushState({ viewer: true }') && app.includes("addEventListener('popstate'"));
 check('纯图片消息不朗读', app.includes('updateSpeakBtnVisibility') && app.includes("clone.querySelectorAll('.agent-img')") && app.includes("spk.classList.toggle('hidden'"));
+check('图片失败兜底+重试', app.includes('img-fail-note') && app.includes('img-retry-btn') && app.includes('img-broken'));
+check('回合超时点此刷新', app.includes('scheduleTurnFallback') && app.includes('turnFallbackReload'));
+check('lanCall 超时控制', app.includes('AbortController') && app.includes('请求超时'));
+check('style 图片占位与失败样式', css.includes('.img-fail-note') && css.includes('min-height: 180px') && css.includes('.img-broken'));
 check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - comfyStartTs)'));
 check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
 check('app 内置全屏查看器', app.includes('openImageViewerOverlay') && app.includes('viewerScale') && app.includes("('ontouchstart' in window)"));

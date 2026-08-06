@@ -434,8 +434,36 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   pointer-events: none;
   white-space: nowrap;
 }
-.agent-img { position: relative; display: inline-block; max-width: 100%; margin: 6px 0; }
-.agent-img img { display: block; max-width: 100%; max-height: 320px; border-radius: var(--radius-sm); border: 1px solid rgba(0, 210, 160, 0.25); }
+.agent-img { position: relative; display: block; max-width: 100%; margin: 6px 0; }
+.agent-img img {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  max-height: 320px;
+  object-fit: contain;
+  background: rgba(0, 210, 160, 0.06);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(0, 210, 160, 0.25);
+}
+.agent-img img.img-broken { opacity: 0.15; filter: grayscale(1); }
+.img-fail-note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.img-retry-btn {
+  height: 1.4em; line-height: 1.4em;
+  font-size: 11px; padding: 0 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(0, 210, 160, 0.25);
+  background: transparent;
+  color: var(--primary);
+  cursor: pointer;
+  font-family: inherit;
+}
 .agent-img-tag {
   position: absolute;
   top: 6px;
@@ -452,6 +480,7 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   white-space: nowrap;
 }
 .img-save-btn {
+  display: block;
   margin-top: 4px;
   height: 1.4em; line-height: 1.4em;
   font-size: 11px; padding: 0 9px;

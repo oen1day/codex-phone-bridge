@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.19';
+  const APP_VERSION = '10.20';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -157,7 +157,17 @@
       default:
         throw new Error('未知方法: ' + method);
     }
-    const r = await fetch(url, init);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs || 15000);
+    let r;
+    try {
+      r = await fetch(url, Object.assign({}, init, { signal: controller.signal }));
+    } catch (e) {
+      clearTimeout(timer);
+      if (e && e.name === 'AbortError') throw new Error('请求超时');
+      throw e;
+    }
+    clearTimeout(timer);
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || '请求失败');
     return data;
@@ -514,14 +524,22 @@
 
   // ---------- threads ----------
   async function loadThreads() {
-    try {
-      const data = await apiCall('threads');
-      state.threads = Array.isArray(data) ? data : (data.threads || data.data || []);
-      renderThreads();
-      if (!state.running) setStatus('已连接');
-    } catch (e) {
-      setStatus('无法读取会话列表', true);
-      showToast('读取会话列表失败', true);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const data = await apiCall('threads', {}, 10000);
+        state.threads = Array.isArray(data) ? data : (data.threads || data.data || []);
+        renderThreads();
+        if (!state.running) setStatus('已连接');
+        return;
+      } catch (e) {
+        if (attempt === 0 && /超时|fetch failed|network|ECONN/i.test((e && e.message) || '')) {
+          await sleep(500);
+          continue;
+        }
+        setStatus('无法读取会话列表', true);
+        showToast('读取会话列表失败: ' + ((e && e.message) || e), true);
+        return;
+      }
     }
   }
 
@@ -1142,11 +1160,46 @@
   }, true);
   messagesEl.addEventListener('error', (e) => {
     const img = e.target;
-    if (img && img.tagName === 'IMG' && img.dataset && img.dataset.save &&
-        String(img.dataset.save).indexOf('/uploads/comfy-') === 0) {
-      resolveComfyImg(img);
+    if (!img || img.tagName !== 'IMG') return;
+    if (img.dataset && img.dataset.save && String(img.dataset.save).indexOf('/uploads/comfy-') === 0) {
+      resolveComfyImg(img); // 中继/本地缓存兜底
+      return;
     }
+    if (img.dataset && img.dataset.failed) return; // 已兜底过
+    img.dataset.failed = '1';
+    const wrap = img.parentNode;
+    if (!wrap) return;
+    img.classList.add('img-broken');
+    const note = document.createElement('div');
+    note.className = 'img-fail-note';
+    note.innerHTML = '图片加载失败 <button class="img-retry-btn">重试</button>';
+    note.querySelector('.img-retry-btn').addEventListener('click', () => {
+      img.classList.remove('img-broken');
+      img.dataset.failed = '';
+      img.src = img.dataset.save || img.src;
+      note.remove();
+    });
+    wrap.appendChild(note);
   }, true);
+
+  // 回合超时兜底：生成完成但长时间未收到 turn/completed 时提示可刷新恢复
+  let turnFallbackTimer = null;
+  function scheduleTurnFallback(sec) {
+    clearTimeout(turnFallbackTimer);
+    turnFallbackTimer = setTimeout(() => {
+      if (!state.running) return;
+      const el = document.createElement('div');
+      el.className = 'system-line';
+      el.innerHTML = '⚠ 回复似乎卡住了，<span class="link-btn" id="turnFallbackReload">点此刷新</span>';
+      messagesEl.appendChild(el);
+      const b = el.querySelector('#turnFallbackReload');
+      if (b) b.addEventListener('click', () => location.reload());
+      scrollBottom();
+    }, (sec || 60) * 1000);
+  }
+  function cancelTurnFallback() {
+    if (turnFallbackTimer) { clearTimeout(turnFallbackTimer); turnFallbackTimer = null; }
+  }
 
   function scrollBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -1199,10 +1252,12 @@
       updateComfyProgress(params.value, params.max);
     } else if (method === 'comfyDone') {
       finishComfyProgress();
+      scheduleTurnFallback(60); // 图已生成，若回合迟迟不结束则提示刷新恢复
     } else if (method === 'comfyError') {
       finishComfyProgress();
       addSystemLine('⚠️ 图像生成失败: ' + ((params.error) || '未知错误'));
     } else if (method === 'turn/completed') {
+      cancelTurnFallback();
       stopTurnPolling();
       stopTurnWatchdog();
       updateThinkingIndicator(false);
@@ -1221,6 +1276,7 @@
         triggerAutoSpeak();
       }, 400);
     } else if (method === 'turn/error') {
+      cancelTurnFallback();
       stopTurnPolling();
       stopTurnWatchdog();
       updateThinkingIndicator(false);
