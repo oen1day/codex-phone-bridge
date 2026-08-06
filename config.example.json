@@ -25,5 +25,6 @@
   "comfyApiKey": "",
   "comfyAuthToken": "",
   "comfyFirebaseRefreshToken": "",
-  "openaiApiKey": ""
+  "openaiApiKey": "",
+  "imageProvider": "comfy"
 }
