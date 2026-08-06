@@ -390,6 +390,41 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
 }
 
 /* ---------- 系统行 / 加载 ---------- */
+.comfy-generating {
+  position: relative;
+  max-width: 86%;
+  margin: 4px auto 12px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid rgba(0, 210, 160, 0.25);
+  background: var(--surface-deep);
+  box-shadow: 0 0 18px rgba(0, 210, 160, 0.12);
+}
+.comfy-placeholder svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: blur(6px);
+  animation: comfy-breathe 2.6s ease-in-out infinite;
+}
+@keyframes comfy-breathe {
+  0%, 100% { opacity: .75; filter: blur(7px); }
+  50% { opacity: 1; filter: blur(4px); }
+}
+.comfy-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--primary-bright);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(0, 210, 160, 0.3);
+  pointer-events: none;
+  white-space: nowrap;
+}
 .system-line {
   text-align: center;
   color: var(--text-weak);

@@ -31,9 +31,12 @@ check('server 有工作流映射', server.includes('zimage_direct_api.json') && 
 check('server 能力开关校验', server.includes('图像生成未开启，请先在手机设置里开启'));
 check('server 无图纯文生图（删 LoadImage）', server.includes("delete graph['299']") && server.includes("delete graph['300'].inputs.image"));
 check('server 进度广播 comfyProgress', server.includes("method: 'comfyProgress'"));
+check('server 广播 comfyStarted', server.includes("method: 'comfyStarted'"));
 check('server 未启动可读提示', server.includes('请先在电脑上启动 ComfyUI'));
 check('server 有 HTTP 端点', server.includes("'/api/comfy/generate'"));
 check('app.js 处理 comfyProgress', app.includes("method === 'comfyProgress'") && app.includes('updateComfyProgress'));
+check('app.js 处理 comfyStarted', app.includes("method === 'comfyStarted'") && app.includes('function startComfyProgress()'));
+check('app.js 有生成卡片计时', app.includes('生成中 ' ) && app.includes('comfyTimer = setInterval'));
 check('app.js 上报能力', app.includes('function reportCapabilities()') && app.includes("'reportCapabilities'"));
 check('MCP 有 generate_image', mcp.includes("name: 'generate_image'"));
 check('MCP 默认 gptimage2', mcp.includes("args.workflow || 'gptimage2'"));
@@ -41,6 +44,8 @@ check('MCP 描述强调默认 gptimage2', mcp.includes('除非用户明确要求
 check('server 默认 gptimage2', server.includes("params.workflow || 'gptimage2'"));
 check('MainActivity 有图像生成开关', java.includes('KEY_CAP_IMAGE_GEN') && java.includes('图像生成（ComfyUI'));
 check('config.example 有 comfyUrl', cfg.includes('comfyUrl'));
+const css = read('public/style.css');
+check('style.css 有占位卡片样式', css.includes('.comfy-generating') && css.includes('.comfy-placeholder') && css.includes('.comfy-badge') && css.includes('comfy-breathe'));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

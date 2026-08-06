@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.9';
+  const APP_VERSION = '10.10';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -640,6 +640,7 @@
   }
 
   async function openThread(id) {
+    finishComfyProgress();
     stopTurnPolling();
     stopTurnWatchdog();
     if (id !== state.currentId) {
@@ -928,6 +929,8 @@
       updateThinkingIndicator(true);
       startTurnPolling();
       startTurnWatchdog();
+    } else if (method === 'comfyStarted') {
+      startComfyProgress();
     } else if (method === 'comfyProgress') {
       updateComfyProgress(params.value, params.max);
     } else if (method === 'comfyDone') {
@@ -1469,20 +1472,53 @@
     scrollBottom();
   }
 
-  let comfyProgressEl = null;
-  function updateComfyProgress(value, max) {
-    const pct = max > 0 ? Math.min(100, Math.round(Number(value) * 100 / Number(max))) : 0;
-    if (!comfyProgressEl || !comfyProgressEl.parentNode) {
-      comfyProgressEl = document.createElement('div');
-      comfyProgressEl.className = 'system-line';
-      messagesEl.appendChild(comfyProgressEl);
-    }
-    comfyProgressEl.textContent = '🎨 图像生成中 ' + pct + '%…';
+  const COMFY_PLACEHOLDER_SVG =
+    '<svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg">' +
+    '<defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0e1a24"/><stop offset="1" stop-color="#14332d"/></linearGradient></defs>' +
+    '<rect width="320" height="200" fill="url(#cg)"/>' +
+    '<circle cx="58" cy="42" r="2.2" fill="#9fd9c8"/><circle cx="132" cy="24" r="1.6" fill="#9fd9c8"/><circle cx="232" cy="48" r="2" fill="#9fd9c8"/><circle cx="282" cy="30" r="1.5" fill="#9fd9c8"/><circle cx="182" cy="18" r="1.8" fill="#9fd9c8"/>' +
+    '<path d="M34 158 Q84 128 148 156 T286 142 V200 H34 Z" fill="#0b1713"/>' +
+    '<path d="M96 158 Q104 136 102 114 Q110 126 116 118 Q122 130 126 158 Z" fill="#7fd4bd"/>' +
+    '<path d="M200 164 Q208 146 206 128 Q212 138 218 130 Q224 142 228 164 Z" fill="#7fd4bd" opacity="0.8"/>' +
+    '</svg>';
+
+  let comfyCardEl = null;
+  let comfyBadgeEl = null;
+  let comfyTimer = null;
+  let comfyStartTs = 0;
+  let comfyPct = null;
+
+  function updateComfyBadge() {
+    if (!comfyBadgeEl) return;
+    const sec = Math.floor((Date.now() - comfyStartTs) / 1000);
+    comfyBadgeEl.textContent = '生成中 ' + sec + 's' + (comfyPct != null ? ' · ' + comfyPct + '%' : '');
+  }
+
+  function startComfyProgress() {
+    finishComfyProgress();
+    comfyCardEl = document.createElement('div');
+    comfyCardEl.className = 'comfy-generating';
+    comfyCardEl.innerHTML = '<div class="comfy-placeholder">' + COMFY_PLACEHOLDER_SVG + '</div><div class="comfy-badge"></div>';
+    messagesEl.appendChild(comfyCardEl);
+    comfyBadgeEl = comfyCardEl.querySelector('.comfy-badge');
+    comfyStartTs = Date.now();
+    comfyPct = null;
+    updateComfyBadge();
+    comfyTimer = setInterval(updateComfyBadge, 1000);
     scrollBottom();
   }
+
+  function updateComfyProgress(value, max) {
+    comfyPct = max > 0 ? Math.min(100, Math.round(Number(value) * 100 / Number(max))) : 0;
+    updateComfyBadge();
+  }
+
   function finishComfyProgress() {
-    if (comfyProgressEl && comfyProgressEl.parentNode) comfyProgressEl.parentNode.removeChild(comfyProgressEl);
-    comfyProgressEl = null;
+    if (comfyTimer) { clearInterval(comfyTimer); comfyTimer = null; }
+    if (comfyCardEl && comfyCardEl.parentNode) comfyCardEl.parentNode.removeChild(comfyCardEl);
+    comfyCardEl = null;
+    comfyBadgeEl = null;
+    comfyPct = null;
   }
 
   // 把手机端能力开关状态告诉电脑（图像生成等能力在电脑侧执行前需要校验）

@@ -118,7 +118,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.9';
+const VERSION = '10.10';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -1240,6 +1240,7 @@ async function comfyGenerate(params) {
     }
     const data = await r.json();
     promptId = data.prompt_id;
+    broadcast({ type: 'notification', method: 'comfyStarted', params: { promptId, workflow, startedAt: Date.now() } });
   } catch (e) {
     if (e instanceof BusinessError) throw e;
     if (/fetch failed|ECONNREFUSED|connect/i.test((e && e.message) || '')) {
