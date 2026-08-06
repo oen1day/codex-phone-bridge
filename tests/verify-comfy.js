@@ -174,9 +174,9 @@ check('server 用户消息只存原文', server.includes("if (userText) input.pu
 check('server 历史剥离系统要求', server.includes('function cleanThreadHistory(') && server.includes('SYSTEM_REQUIREMENT.trim()') && server.includes('\\[系统要求：[\\s\\S]*\\]'));
 check('前端过滤历史系统要求', app.includes('\\[系统要求：[\\s\\S]*\\]') && app.includes('兜底：历史里混入的系统要求不再显示'));
 check('前端用户气泡兜底过滤', app.includes('兜底：不把系统要求显示在用户气泡里'));
-check('app 自动朗读等预生成缓存', app.includes('function waitTtsStatus(') && app.includes('setTimeout(tick, 500)') && app.includes('waitTtsStatus(clean, 15000)'));
-check('app 流式 30 秒超时', app.includes('setTimeout(() => ctl.abort(), 30000)') && app.includes('signal: ctl.signal'));
-check('app 流式失败等缓存再降级', app.includes('waitTtsStatus(streamText, 8000)') && app.includes('playMessageSegments(convId, msgId, streamText, auto, temp)'));
+check('app 自动朗读等预生成缓存', app.includes('function waitTtsStatus(') && app.includes('setTimeout(tick, 500)') && app.includes('waitTtsStatus(clean, ttsTimeoutFor(clean, 30000))'));
+check('app 流式超时按长度放宽', app.includes('setTimeout(() => ctl.abort(), ttsTimeoutFor(streamText, 30000))') && app.includes('signal: ctl.signal'));
+check('app 流式失败等缓存再降级', app.includes('waitTtsStatus(streamText, Math.min(ttsTimeoutFor(streamText, 30000), 60000))') && app.includes('playMessageSegments(convId, msgId, streamText, auto, temp)'));
 check('app 单回合生图上限', app.includes('let turnGenCount = 0') && app.includes('turnGenCount++') && app.includes('检测到多次生图请求'));
 check('server 用户文本剥离系统提示段', server.includes("String(body.text || '').replace") && server.includes('\\[系统要求：[\\s\\S]*?\\]'));
 check('server 自动朗读也预生成', server.includes('if (text) queuePreGen(text, auto)'));
@@ -186,6 +186,10 @@ check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));
 check('style 确认弹窗样式', css.includes('.confirm-dialog') && css.includes('.confirm-box'));
+check('app 朗读超时按长度自适应', app.includes('function ttsTimeoutFor(') && app.includes('n * 1500 + 15000') && app.includes('Math.min(120000'));
+check('app 流式用自适应超时', app.includes('ttsTimeoutFor(streamText, 30000)'));
+check('app 长文本走分段合成', app.includes('clean.length > 30') && app.includes('playMessageSegments(convId, msgId, text, auto, temp)'));
+check('app 自动朗读等缓存按长度放宽', app.includes('waitTtsStatus(clean, ttsTimeoutFor(clean, 30000))'));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.37';
+  const APP_VERSION = '10.38';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -3058,6 +3058,12 @@
     });
   }
 
+  // 朗读超时按文本长度自适应：每字预留 1.5s + 15s 余量，最短 30s，最长 120s
+  function ttsTimeoutFor(text, minMs) {
+    const n = String(text || '').length;
+    return Math.min(120000, Math.max(minMs || 30000, n * 1500 + 15000));
+  }
+
   async function runTtsStream(convId, msgId, streamText, startIdx, auto, temp, session) {
     const msgKey = ttsKey(convId, msgId);
     const sid = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -3065,10 +3071,10 @@
     ttsLanReader = null;
     try {
       if (relayCfg) {
-        await apiCall('ttsStreamStart', { text: streamText }, 30000);
+        await apiCall('ttsStreamStart', { text: streamText }, ttsTimeoutFor(streamText, 30000));
       } else {
         const ctl = new AbortController();
-        const timer = setTimeout(() => ctl.abort(), 30000); // 流式 30 秒超时，不再无限等
+        const timer = setTimeout(() => ctl.abort(), ttsTimeoutFor(streamText, 30000)); // 超时按长度放宽（每字1.5s+15s）
         let res;
         try {
           res = await fetch('/api/tts/stream', {
@@ -3088,7 +3094,7 @@
       ttsStreamState = null;
       if (session !== ttsSession) return;
       if (auto) {
-        const st2 = await waitTtsStatus(streamText, 8000);
+        const st2 = await waitTtsStatus(streamText, Math.min(ttsTimeoutFor(streamText, 30000), 60000));
         if (session !== ttsSession) return;
         if (st2 && !st2.partial) {
           const blob = b64ToBlob(st2.audioB64, st2.mime || 'audio/wav');
@@ -3171,8 +3177,8 @@
     setSpeakBtn(msgKey, 'loading');
     showToast('正在生成语音…');
 
-    // 1) 电脑端整段缓存（自动朗读等预生成完成，秒播；手动点播直接查）
-    const st = auto ? await waitTtsStatus(clean, 15000) : await tryTtsStatus(clean);
+    // 1) 电脑端整段缓存（自动朗读等预生成完成，秒播；等待时间按文本长度放宽）
+    const st = auto ? await waitTtsStatus(clean, ttsTimeoutFor(clean, 30000)) : await tryTtsStatus(clean);
     if (st && !st.partial) {
       const blob = b64ToBlob(st.audioB64, st.mime || 'audio/wav');
       if (session !== ttsSession || state.currentId !== convId) return;
@@ -3221,6 +3227,11 @@
       // 中继模式：逐段整段合成（每条 RPC 独立、有超时和重试，不会再永久卡住）
       const segs = splitTtsSegments(text);
       await playSegmentsLoop(convId, msgId, segs, 0, auto, temp, session);
+      return;
+    }
+    // 长文本（>30 字）走分段合成，边生成边播，避免单次流式等太久
+    if (clean.length > 30) {
+      await playMessageSegments(convId, msgId, text, auto, temp);
       return;
     }
     // 局域网模式：走流式（边生成边播）
