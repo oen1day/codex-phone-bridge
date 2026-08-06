@@ -103,16 +103,22 @@ function loadConfig() {
     ttsUrl: 'http://127.0.0.1:8866',
     ttsEmotion: '平静日常',
     ttsSegmentChars: 150,
-    ttsTimeoutMs: 300000
+    ttsTimeoutMs: 300000,
+    comfyUrl: 'http://127.0.0.1:8188',
+    comfyWorkflows: '',
+    comfyInputDir: ''
   }, cfg);
   if (!merged.workspace) merged.workspace = docs;
   if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
   if (!merged.relayBroker) merged.relayBroker = 'wss://broker.emqx.io:8084/mqtt';
+  if (!merged.comfyUrl) merged.comfyUrl = 'http://127.0.0.1:8188';
+  if (!merged.comfyWorkflows) merged.comfyWorkflows = path.join(ROOT, 'comfy-workflows');
+  if (!merged.comfyInputDir) merged.comfyInputDir = '';
   return merged;
 }
 
 const config = loadConfig();
-const VERSION = '10.8';
+const VERSION = '10.9';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -1141,6 +1147,177 @@ function pageThread(thread, limit, before) {
   };
 }
 
+// ---------- ComfyUI 图像生成 ----------
+let phoneCapsCache = {};
+
+const COMFY_WORKFLOWS = {
+  zimage: 'zimage_direct_api.json',
+  zimage_upscale: 'zimage_upscale_api.json',
+  gptimage2: 'gptimage2_api.json'
+};
+
+function findComfyInputDir() {
+  if (config.comfyInputDir && fs.existsSync(config.comfyInputDir)) return config.comfyInputDir;
+  const home = process.env.USERPROFILE || '';
+  const cands = [
+    path.join('E:', 'NewComfyUi', 'input'),
+    path.join('E:', 'ComfyUI', 'input'),
+    path.join('E:', 'Comfy-Desktop', 'ComfyUI-Installs', 'ComfyUI', 'ComfyUI', 'input'),
+    path.join(home, 'ComfyUI', 'input')
+  ];
+  return cands.find(p => fs.existsSync(p)) || '';
+}
+
+async function comfyGenerate(params) {
+  const caps = phoneCapsCache || {};
+  if (!caps.image_generation) throw new BusinessError('图像生成未开启，请先在手机设置里开启');
+  const workflow = String(params.workflow || 'zimage');
+  const file = COMFY_WORKFLOWS[workflow];
+  if (!file) throw new BusinessError('未知工作流: ' + workflow);
+  const prompt = String(params.prompt || '').trim();
+  if (!prompt) throw new BusinessError('缺少提示词 prompt');
+  const wfDir = config.comfyWorkflows || path.join(ROOT, 'comfy-workflows');
+  const wfPath = path.join(wfDir, file);
+  if (!fs.existsSync(wfPath)) throw new BusinessError('未找到工作流文件: ' + file);
+  let graph;
+  try { graph = JSON.parse(fs.readFileSync(wfPath, 'utf8')); } catch (_) { throw new BusinessError('工作流文件损坏: ' + file); }
+
+  if (workflow === 'gptimage2') {
+    graph['300'].inputs.prompt = prompt;
+    if (params.seed != null) graph['300'].inputs.seed = Number(params.seed);
+  } else {
+    graph['57'].inputs.text = prompt;
+    if (params.width != null) graph['57'].inputs.width = Number(params.width);
+    if (params.height != null) graph['57'].inputs.height = Number(params.height);
+  }
+
+  const imageSrc = params.imagePath || params.image;
+  if (workflow === 'gptimage2') {
+    if (imageSrc) {
+      const inputDir = findComfyInputDir();
+      if (!inputDir) throw new BusinessError('找不到 ComfyUI input 目录，请在 config.json 配置 comfyInputDir');
+      let buf = null;
+      let ext = '.png';
+      if (/^data:/i.test(String(imageSrc))) {
+        const m = /^data:([^;]+);base64,(.*)$/s.exec(imageSrc);
+        if (m) {
+          buf = Buffer.from(m[2], 'base64');
+          if (/jpeg/i.test(m[1])) ext = '.jpg';
+          else if (/webp/i.test(m[1])) ext = '.webp';
+        }
+      } else {
+        const p = String(imageSrc).replace(/^\/+/, '');
+        const candidate = path.isAbsolute(p) ? p : path.join(ROOT, p);
+        if (fs.existsSync(candidate)) {
+          buf = fs.readFileSync(candidate);
+          const fext = path.extname(candidate).toLowerCase();
+          if (fext === '.jpg' || fext === '.jpeg' || fext === '.png' || fext === '.webp') ext = fext === '.jpeg' ? '.jpg' : fext;
+        }
+      }
+      if (!buf) throw new BusinessError('无法读取图片: ' + String(imageSrc).slice(0, 80));
+      const fname = 'comfy_' + crypto.randomBytes(6).toString('hex') + ext;
+      fs.writeFileSync(path.join(inputDir, fname), buf);
+      graph['299'].inputs.image = fname;
+    } else {
+      // 无图：纯文生图模式——移除 LoadImage 节点并清空 image 输入
+      delete graph['299'];
+      delete graph['300'].inputs.image;
+    }
+  }
+
+  const clientId = crypto.randomBytes(8).toString('hex');
+  let promptId = null;
+  try {
+    const r = await fetch(config.comfyUrl + '/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: graph, client_id: clientId })
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new BusinessError('ComfyUI 提交失败: ' + txt.slice(0, 200));
+    }
+    const data = await r.json();
+    promptId = data.prompt_id;
+  } catch (e) {
+    if (e instanceof BusinessError) throw e;
+    if (/fetch failed|ECONNREFUSED|connect/i.test((e && e.message) || '')) {
+      throw new BusinessError('请先在电脑上启动 ComfyUI');
+    }
+    throw e;
+  }
+
+  let completed = false;
+  let resultImg = null;
+  let lastErr = null;
+  let comfyWs = null;
+  try {
+    comfyWs = new WebSocket(config.comfyUrl.replace(/^http/, 'ws') + '/ws?clientId=' + clientId);
+    comfyWs.addEventListener('message', (ev) => {
+      try {
+        const m = JSON.parse(typeof ev.data === 'string' ? ev.data : ev.data.toString());
+        if (m.type === 'progress') {
+          broadcast({ type: 'notification', method: 'comfyProgress', params: { promptId, value: m.data.value, max: m.data.max } });
+        } else if (m.type === 'execution_error') {
+          broadcast({ type: 'notification', method: 'comfyError', params: { promptId, error: ((m.data && (m.data.exception_message || m.data.message)) || '执行失败') } });
+        } else if (m.type === 'execution_success' || m.type === 'exec_complete') {
+          broadcast({ type: 'notification', method: 'comfyDone', params: { promptId } });
+        }
+      } catch (_) {}
+    });
+    comfyWs.addEventListener('error', () => {});
+  } catch (_) {}
+
+  await new Promise((resolve) => {
+    const poll = setInterval(async () => {
+      if (completed) { clearInterval(poll); resolve(); return; }
+      try {
+        const h = await fetch(config.comfyUrl + '/history/' + promptId);
+        const hist = await h.json();
+        const entry = hist[promptId];
+        if (!entry) return;
+        const st = entry.status || {};
+        const doneOk = st.completed || st.status_str === 'success' || (entry.outputs && Object.keys(entry.outputs).length > 0);
+        if (doneOk) {
+          completed = true;
+          for (const out of Object.values(entry.outputs || {})) {
+            if (out.images && out.images.length) { resultImg = out.images[0]; break; }
+          }
+          clearInterval(poll);
+          resolve();
+        } else if (st.status_str === 'error' || st.completed === false) {
+          completed = true;
+          const em = st.messages ? st.messages.find(x => x[0] === 'execution_error') : null;
+          lastErr = (em && em[1] && em[1].message) || 'ComfyUI 执行失败';
+          clearInterval(poll);
+          resolve();
+        }
+      } catch (_) {}
+    }, 1000);
+    setTimeout(() => {
+      if (!completed) { completed = true; clearInterval(poll); lastErr = lastErr || 'ComfyUI 生成超时（180 秒）'; resolve(); }
+    }, 180000);
+  });
+  try { if (comfyWs) comfyWs.close(); } catch (_) {}
+  if (!completed && !lastErr) lastErr = 'ComfyUI 生成超时';
+  if (lastErr) throw new BusinessError(lastErr);
+  if (!resultImg) throw new BusinessError('生成完成但没拿到图片');
+
+  const qs = new URLSearchParams({ filename: resultImg.filename, type: resultImg.type || 'output' });
+  if (resultImg.subfolder) qs.set('subfolder', resultImg.subfolder);
+  let imgBuf = null;
+  try {
+    const ir = await fetch(config.comfyUrl + '/view?' + qs.toString());
+    if (ir.ok) imgBuf = Buffer.from(await ir.arrayBuffer());
+  } catch (_) {}
+  if (!imgBuf) throw new BusinessError('取回图片失败');
+  const id = crypto.randomBytes(8).toString('hex');
+  const ext = /\.png$/i.test(resultImg.filename) ? '.png' : '.jpg';
+  const outFile = path.join(UPLOAD_DIR, 'comfy-' + id + ext);
+  fs.writeFileSync(outFile, imgBuf);
+  return { ok: true, path: outFile, url: '/uploads/comfy-' + id + ext, workflow, promptId };
+}
+
 async function apiDispatch(method, params, clientId) {
   const c = await getClient();
   switch (method) {
@@ -1387,6 +1564,12 @@ async function apiDispatch(method, params, clientId) {
       return phoneRpc('getDeviceStatus', {}, 30000);
     case 'phoneCapabilities':
       return phoneRpc('getCapabilities', {}, 30000);
+    case 'reportCapabilities': {
+      phoneCapsCache = (params && params.caps) || {};
+      return { ok: true };
+    }
+    case 'comfyGenerate':
+      return await comfyGenerate(params || {});
     default:
       throw new Error('未知方法: ' + method);
   }
@@ -1686,6 +1869,11 @@ async function handleApi(req, res, url) {
     }
     if (p === '/api/phone/capabilities' && req.method === 'POST') {
       sendJson(res, 200, await apiDispatch('phoneCapabilities', {}));
+      return;
+    }
+    if (p === '/api/comfy/generate' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 16 * 1024 * 1024)) || '{}');
+      sendJson(res, 200, await apiDispatch('comfyGenerate', body));
       return;
     }
     sendJson(res, 404, { error: 'Not found' });

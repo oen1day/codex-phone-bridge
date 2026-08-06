@@ -1,0 +1,27 @@
+{
+  "57": {
+    "class_type": "f2fdebf6-dfaf-43b6-9eb2-7f70613cfdc1",
+    "inputs": {
+      "text": ""
+    }
+  },
+  "77": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "RealESRGAN_x4plus.safetensors"
+    }
+  },
+  "76": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": ["77", 0],
+      "image": ["57", 0]
+    }
+  },
+  "999": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["76", 0]
+    }
+  }
+}

@@ -75,9 +75,10 @@ public class MainActivity extends Activity {
     private static final String KEY_EFFORT = "effort";
     private static final String KEY_AUTO_SPEAK = "auto_speak";
     private static final String KEY_CAP_DEVICE_STATUS = "cap_device_status";
+    private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.8";
+    private static final String APP_VERSION = "10.9";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -165,6 +166,7 @@ public class MainActivity extends Activity {
                 o.put("app_settings", true);
                 o.put("ignore_battery", true);
                 o.put("device_status", p.getBoolean(KEY_CAP_DEVICE_STATUS, false));
+                o.put("image_generation", p.getBoolean(KEY_CAP_IMAGE_GEN, false));
             } catch (Exception ignored) {}
             return o.toString();
         }
@@ -569,6 +571,13 @@ public class MainActivity extends Activity {
         capDeviceBox.setChecked(curDevice);
         root.addView(capDeviceBox, lp());
 
+        final CheckBox capComfyBox = new CheckBox(this);
+        capComfyBox.setText("图像生成（ComfyUI，需电脑运行 ComfyUI）");
+        capComfyBox.setTextColor(Color.parseColor("#E6EDF3"));
+        boolean curComfy = initial != null && initial.length > 9 && "true".equalsIgnoreCase(initial[9]);
+        capComfyBox.setChecked(curComfy);
+        root.addView(capComfyBox, lp());
+
         final EditText brokerInput = new EditText(this);
         brokerInput.setHint("中继服务器地址（一般不用改）");
         if (initial != null && initial.length > 6 && !initial[6].isEmpty()) brokerInput.setText(initial[6]);
@@ -655,7 +664,7 @@ public class MainActivity extends Activity {
                             updateInput.getText().toString().trim(),
                             effortValues[effortSpinner.getSelectedItemPosition()],
                             autoSpeakBox.isChecked(), capDeviceBox.isChecked(),
-                            brokerInput.getText().toString().trim(), dialogToDismiss);
+                            capComfyBox.isChecked(), brokerInput.getText().toString().trim(), dialogToDismiss);
                     return;
                 }
                 // 局域网：先补全协议，再做保存前预检（TCP 4 秒超时），失败留在设置页
@@ -666,6 +675,7 @@ public class MainActivity extends Activity {
                 final String lanEffort = effortValues[effortSpinner.getSelectedItemPosition()];
                 final boolean lanAutoSpeak = autoSpeakBox.isChecked();
                 final boolean lanCapDevice = capDeviceBox.isChecked();
+                final boolean lanCapComfy = capComfyBox.isChecked();
                 final String lanUpdateUrl = updateInput.getText().toString().trim();
                 final String lanBroker = brokerInput.getText().toString().trim();
                 save.setEnabled(false);
@@ -684,7 +694,7 @@ public class MainActivity extends Activity {
                                     return;
                                 }
                                 finishSave(mode[0], lanUrl, room, pw, lanUpdateUrl,
-                                        lanEffort, lanAutoSpeak, lanCapDevice, lanBroker, dialogToDismiss);
+                                        lanEffort, lanAutoSpeak, lanCapDevice, lanCapComfy, lanBroker, dialogToDismiss);
                             }
                         });
                     }
@@ -1062,7 +1072,7 @@ public class MainActivity extends Activity {
     }
 
     private void finishSave(String mode, String url, String room, String pw, String updateUrl,
-                            String effort, boolean autoSpeak, boolean capDevice, String broker, AlertDialog dlg) {
+                            String effort, boolean autoSpeak, boolean capDevice, boolean capComfy, String broker, AlertDialog dlg) {
         SharedPreferences.Editor e = getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
         e.putString(KEY_MODE, mode);
         e.putString(KEY_URL, url);
@@ -1072,6 +1082,7 @@ public class MainActivity extends Activity {
         e.putString(KEY_EFFORT, effort);
         e.putBoolean(KEY_AUTO_SPEAK, autoSpeak);
         e.putBoolean(KEY_CAP_DEVICE_STATUS, capDevice);
+        e.putBoolean(KEY_CAP_IMAGE_GEN, capComfy);
         e.putString(KEY_BROKER, broker.isEmpty() ? RELAY_BROKER : broker);
         e.apply();
         setupUi();
@@ -1108,7 +1119,8 @@ public class MainActivity extends Activity {
                 prefs.getString(KEY_EFFORT, "medium"),
                 prefs.getString(KEY_BROKER, RELAY_BROKER),
                 String.valueOf(prefs.getBoolean(KEY_AUTO_SPEAK, true)),
-                String.valueOf(prefs.getBoolean(KEY_CAP_DEVICE_STATUS, false))
+                String.valueOf(prefs.getBoolean(KEY_CAP_DEVICE_STATUS, false)),
+                String.valueOf(prefs.getBoolean(KEY_CAP_IMAGE_GEN, false))
         };
         final AlertDialog dlg = new AlertDialog.Builder(this)
                 .setTitle("连接设置")

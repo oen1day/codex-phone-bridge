@@ -1,0 +1,29 @@
+{
+  "299": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": ""
+    }
+  },
+  "300": {
+    "class_type": "OpenAIGPTImage1",
+    "inputs": {
+      "image": ["299", 0],
+      "prompt": "",
+      "seed": 802759396,
+      "quality": "low",
+      "background": "auto",
+      "size": "2048x1152",
+      "n": 1,
+      "model": "gpt-image-2",
+      "custom_width": 1920,
+      "custom_height": 1088
+    }
+  },
+  "999": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["300", 0]
+    }
+  }
+}

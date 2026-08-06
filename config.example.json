@@ -18,5 +18,8 @@
   "ttsEmotion": "平静日常",
   "ttsSegmentChars": 150,
   "ttsTimeoutMs": 90000,
-  "ttsPythonPath": ""
+  "ttsPythonPath": "",
+  "comfyUrl": "http://127.0.0.1:8188",
+  "comfyWorkflows": "",
+  "comfyInputDir": ""
 }

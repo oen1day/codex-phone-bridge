@@ -65,6 +65,22 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {} }
   },
   {
+    name: 'generate_image',
+    description: '在电脑端 ComfyUI 生成或编辑图片。workflow 取值：zimage（默认文生图）、zimage_upscale（文生图+超分）、gptimage2（OpenAI GPT Image2，可编辑可生成）。prompt 必填，中文描述即可。imagePath 可选：用户上传了图片且要用 gptimage2 编辑时传图片的本机路径或 /uploads/ 路径；不传 imagePath 时 gptimage2 自动走纯文生图模式。生成完成返回图片地址，请在回复中把图片展示给用户。需要在手机设置里开启“图像生成”能力。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workflow: { type: 'string', enum: ['zimage', 'zimage_upscale', 'gptimage2'], description: '工作流' },
+        prompt: { type: 'string', description: '生成/编辑要求（中文即可）' },
+        imagePath: { type: 'string', description: '要编辑的图片路径（本机路径或 /uploads/ 路径），仅 gptimage2 编辑模式需要' },
+        upscale: { type: 'boolean', description: '是否超分（zimage 系列）' },
+        width: { type: 'integer', description: 'zimage 宽度（可选）' },
+        height: { type: 'integer', description: 'zimage 高度（可选）' }
+      },
+      required: ['prompt']
+    }
+  },
+  {
     name: 'list_phone_apps',
     description: '列出手机（鳍点AI App）上已安装的常用应用，返回名称和包名。这是读取手机应用列表的推荐方式：手机通过无线中继连接，不需要 USB 数据线、不需要 adb、不需要 USB 调试。直接调用本工具即可；不要检查 USB 设备或运行 adb 命令。需要电脑端桥接窗口正在运行、手机 App 已连接中继。',
     inputSchema: { type: 'object', properties: {} }
@@ -158,7 +174,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '10.8' }
+        serverInfo: { name: 'codex-phone-bridge', version: '10.9' }
       }
     });
     return;
@@ -200,6 +216,16 @@ async function handle(msg) {
         result = await api('/api/phone/capabilities', {});
       } else if (name === 'get_device_status') {
         result = await api('/api/phone/device-status', {});
+      } else if (name === 'generate_image') {
+        if (!args.prompt) throw new Error('缺少 prompt 参数');
+        const wf = args.upscale ? 'zimage_upscale' : (args.workflow || 'zimage');
+        result = await api('/api/comfy/generate', {
+          workflow: wf,
+          prompt: args.prompt,
+          imagePath: args.imagePath || '',
+          width: args.width,
+          height: args.height
+        });
       } else {
         throw new Error('未知工具: ' + name);
       }

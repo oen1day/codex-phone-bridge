@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.8';
+  const APP_VERSION = '10.9';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -384,6 +384,7 @@
               testPairing();
               loadThreads();
               resumeTurnIfActive();
+              reportCapabilities();
             }
           } else {
             relayFailStreak++;
@@ -448,6 +449,7 @@
       $('reconnectBtn').classList.remove('hidden');
       await connectRelay();
       loadThreads();
+      reportCapabilities();
       return;
     }
     try {
@@ -455,6 +457,7 @@
       const data = await r.json();
       if (data.ok) {
         showMain(data);
+        reportCapabilities();
       } else {
         showLogin();
       }
@@ -906,7 +909,7 @@
   function handleNotification(msg) {
     const method = msg.method;
     const params = msg.params || {};
-    if (!params.threadId) return;
+    if (!params.threadId && !/^comfy/.test(method)) return;
     if (params.threadId && (!state.currentId || params.threadId !== state.currentId)) return;
     traceEvent(method);
     lastTurnActivityAt = Date.now();
@@ -925,6 +928,13 @@
       updateThinkingIndicator(true);
       startTurnPolling();
       startTurnWatchdog();
+    } else if (method === 'comfyProgress') {
+      updateComfyProgress(params.value, params.max);
+    } else if (method === 'comfyDone') {
+      finishComfyProgress();
+    } else if (method === 'comfyError') {
+      finishComfyProgress();
+      addSystemLine('⚠️ 图像生成失败: ' + ((params.error) || '未知错误'));
     } else if (method === 'turn/completed') {
       stopTurnPolling();
       stopTurnWatchdog();
@@ -1457,6 +1467,30 @@
     el.textContent = text;
     messagesEl.appendChild(el);
     scrollBottom();
+  }
+
+  let comfyProgressEl = null;
+  function updateComfyProgress(value, max) {
+    const pct = max > 0 ? Math.min(100, Math.round(Number(value) * 100 / Number(max))) : 0;
+    if (!comfyProgressEl || !comfyProgressEl.parentNode) {
+      comfyProgressEl = document.createElement('div');
+      comfyProgressEl.className = 'system-line';
+      messagesEl.appendChild(comfyProgressEl);
+    }
+    comfyProgressEl.textContent = '🎨 图像生成中 ' + pct + '%…';
+    scrollBottom();
+  }
+  function finishComfyProgress() {
+    if (comfyProgressEl && comfyProgressEl.parentNode) comfyProgressEl.parentNode.removeChild(comfyProgressEl);
+    comfyProgressEl = null;
+  }
+
+  // 把手机端能力开关状态告诉电脑（图像生成等能力在电脑侧执行前需要校验）
+  function reportCapabilities() {
+    if (!window.AndroidBridge || !window.AndroidBridge.getCapabilities) return;
+    let caps = {};
+    try { caps = JSON.parse(window.AndroidBridge.getCapabilities() || '{}') || {}; } catch (_) {}
+    apiCall('reportCapabilities', { caps }).catch(() => {});
   }
 
   function copyText(text) {

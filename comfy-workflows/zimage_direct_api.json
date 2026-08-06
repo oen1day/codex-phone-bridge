@@ -1,0 +1,14 @@
+{
+  "57": {
+    "class_type": "f2fdebf6-dfaf-43b6-9eb2-7f70613cfdc1",
+    "inputs": {
+      "text": ""
+    }
+  },
+  "999": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["57", 0]
+    }
+  }
+}
