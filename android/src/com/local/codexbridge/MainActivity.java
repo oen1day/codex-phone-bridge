@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.Context;
 import android.content.BroadcastReceiver;
+import android.content.ContentValues;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -13,6 +14,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -26,6 +28,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.StatFs;
 import android.provider.Settings;
+import android.provider.MediaStore;
 import android.telephony.TelephonyManager;
 import android.util.Base64;
 import android.util.DisplayMetrics;
@@ -78,7 +81,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.11";
+    private static final String APP_VERSION = "10.12";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -232,6 +235,66 @@ public class MainActivity extends Activity {
                 try { o.put("ok", false); o.put("error", "读取设备状态失败: " + e.getMessage()); } catch (Exception ignored) {}
             }
             return o.toString();
+        }
+
+        // 保存图片到系统相册：支持 http(s) 绝对地址（局域网）和 data:image base64（中继）
+        @JavascriptInterface
+        public String saveImageToGallery(String url) {
+            try {
+                if (url == null || url.isEmpty()) return "空地址";
+                if (Build.VERSION.SDK_INT < 29) {
+                    if (checkSelfPermission("android.permission.WRITE_EXTERNAL_STORAGE") != PackageManager.PERMISSION_GRANTED) {
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                requestPermissions(new String[]{"android.permission.WRITE_EXTERNAL_STORAGE"}, 2003);
+                            }
+                        });
+                        return "需要存储权限，请在系统弹窗允许后重试";
+                    }
+                }
+                final byte[] data;
+                final String ext;
+                if (url.startsWith("data:image")) {
+                    String b64 = url.substring(url.indexOf(',') + 1);
+                    data = Base64.decode(b64, Base64.DEFAULT);
+                    ext = url.startsWith("data:image/jpeg") ? ".jpg" : ".png";
+                } else {
+                    java.net.URL u = new java.net.URL(url);
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection) u.openConnection();
+                    c.setConnectTimeout(10000);
+                    c.setReadTimeout(30000);
+                    c.setRequestProperty("User-Agent", "codex-phone-bridge");
+                    java.io.InputStream in = c.getInputStream();
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                    in.close();
+                    data = bos.toByteArray();
+                    String ct = c.getContentType();
+                    ext = (ct != null && ct.contains("jpeg")) ? ".jpg" : ".png";
+                    c.disconnect();
+                }
+                String name = "qidian_" + System.currentTimeMillis() + ext;
+                if (Build.VERSION.SDK_INT >= 29) {
+                    ContentValues cv = new ContentValues();
+                    cv.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+                    cv.put(MediaStore.Images.Media.MIME_TYPE, ext.equals(".jpg") ? "image/jpeg" : "image/png");
+                    cv.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/鳍点AI");
+                    android.net.Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+                    if (uri == null) return "保存失败：无法创建相册条目";
+                    java.io.OutputStream os = getContentResolver().openOutputStream(uri);
+                    os.write(data);
+                    os.close();
+                } else {
+                    String saved = MediaStore.Images.Media.insertImage(getContentResolver(),
+                            BitmapFactory.decodeByteArray(data, 0, data.length), name, "鳍点AI 生成的图片");
+                    if (saved == null) return "保存失败：相册写入失败";
+                }
+                return "ok";
+            } catch (Exception e) {
+                return "保存失败: " + (e.getMessage() == null ? e.toString() : e.getMessage());
+            }
         }
 
         private String ttsDir() {

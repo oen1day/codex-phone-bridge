@@ -41,8 +41,14 @@ check('app.js 处理 comfyStarted', app.includes("method === 'comfyStarted'") &&
 check('app.js 有生成卡片计时', app.includes('生成中 ' ) && app.includes('comfyTimer = setInterval'));
 check('app.js 上报能力', app.includes('function reportCapabilities()') && app.includes("'reportCapabilities'"));
 check('app.js lanCall 支持能力上报', app.includes("case 'reportCapabilities'"));
+check('app.js 渲染 AI 图片+保存按钮', app.includes('renderAgentTextWithImages') && app.includes('img-save-btn') && app.includes('saveImageToDevice'));
+check('app.js 自动保存后通知删除', app.includes('deleteComfyImage'));
+check('app.js 中继取图 dataURL', app.includes('fetchComfyDataUrl'));
 check('server 有上报 HTTP 端点', server.includes("'/api/report-capabilities'"));
 check('能力缓存持久化', server.includes('PHONE_CAPS_PATH') && server.includes('loadPhoneCaps()'));
+check('server 有删除图片接口', server.includes('deleteComfyImage') && server.includes("'/api/images/delete'"));
+check('server 有中继取图接口', server.includes('comfyImageDataUrl') && server.includes("'/api/comfy-image'"));
+check('server 有 30 分钟兜底清理', server.includes('function cleanupComfyImages') && server.includes('30 * 60 * 1000'));
 check('MCP 有 generate_image', mcp.includes("name: 'generate_image'"));
 check('MCP 默认 gptimage2', mcp.includes("args.workflow || 'gptimage2'"));
 check('MCP 描述强调默认 gptimage2', mcp.includes('除非用户明确要求使用本地 z-image 生成'));
@@ -61,6 +67,8 @@ check('config.example 有 comfyFirebaseRefreshToken', cfg.includes('comfyFirebas
 check('config.example 有 openaiApiKey', cfg.includes('openaiApiKey'));
 check('config.example 有 httpsProxy', cfg.includes('httpsProxy'));
 check('.gitignore 忽略 node_modules', read('.gitignore').includes('node_modules/'));
+check('Java 有保存到相册方法', java.includes('saveImageToGallery') && java.includes('MediaStore.Images.Media'));
+check('Manifest 有低版本存储权限', read('android/AndroidManifest.xml').includes('WRITE_EXTERNAL_STORAGE'));
 const css = read('public/style.css');
 check('style.css 有占位卡片样式', css.includes('.comfy-generating') && css.includes('.comfy-placeholder') && css.includes('.comfy-badge') && css.includes('comfy-breathe'));
 

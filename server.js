@@ -131,7 +131,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.11';
+const VERSION = '10.12';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1504,6 +1504,43 @@ async function comfyGenerate(params) {
   return { ok: true, path: outFile, url: '/uploads/comfy-' + id + ext, workflow, promptId };
 }
 
+// 只允许访问 uploads/ 下 comfy-* 开头的文件，防止路径穿越
+function safeComfyPath(p) {
+  const s = String(p || '');
+  const m = /^\/uploads\/(comfy-[A-Za-z0-9._-]+)$/.exec(s);
+  if (!m) return null;
+  const f = path.join(UPLOAD_DIR, m[1]);
+  if (!f.startsWith(UPLOAD_DIR) || !fs.existsSync(f)) return null;
+  return f;
+}
+
+// 中继模式取图：把 uploads/comfy-* 转成 dataURL 经中继回传手机
+function comfyImageDataUrl(p) {
+  const f = safeComfyPath(p);
+  if (!f) throw new BusinessError('无效的图片路径');
+  const data = fs.readFileSync(f);
+  const ext = path.extname(f).toLowerCase();
+  const mime = ext === '.jpg' ? 'image/jpeg' : (ext === '.webp' ? 'image/webp' : 'image/png');
+  return { dataUrl: 'data:' + mime + ';base64,' + data.toString('base64') };
+}
+
+// 兜底清理：uploads/ 下超过 30 分钟且未被删除的 comfy-* 生成图
+function cleanupComfyImages() {
+  try {
+    if (!fs.existsSync(UPLOAD_DIR)) return;
+    const now = Date.now();
+    for (const name of fs.readdirSync(UPLOAD_DIR)) {
+      if (!name.startsWith('comfy-')) continue;
+      try {
+        const st = fs.statSync(path.join(UPLOAD_DIR, name));
+        if (now - st.mtimeMs > 30 * 60 * 1000) fs.unlinkSync(path.join(UPLOAD_DIR, name));
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+cleanupComfyImages();
+setInterval(cleanupComfyImages, 60 * 60 * 1000);
+
 async function apiDispatch(method, params, clientId) {
   const c = await getClient();
   switch (method) {
@@ -1757,6 +1794,14 @@ async function apiDispatch(method, params, clientId) {
     }
     case 'comfyGenerate':
       return await comfyGenerate(params || {});
+    case 'comfyImage':
+      return comfyImageDataUrl(params && params.path);
+    case 'deleteComfyImage': {
+      const f = safeComfyPath(params && params.path);
+      if (!f) throw new BusinessError('无效的图片路径');
+      try { fs.unlinkSync(f); } catch (_) {}
+      return { ok: true };
+    }
     default:
       throw new Error('未知方法: ' + method);
   }
@@ -2066,6 +2111,16 @@ async function handleApi(req, res, url) {
     if (p === '/api/comfy/generate' && req.method === 'POST') {
       const body = JSON.parse((await readBody(req, 16 * 1024 * 1024)) || '{}');
       sendJson(res, 200, await apiDispatch('comfyGenerate', body));
+      return;
+    }
+    if (p === '/api/comfy-image' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      sendJson(res, 200, await apiDispatch('comfyImage', body));
+      return;
+    }
+    if (p === '/api/images/delete' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      sendJson(res, 200, await apiDispatch('deleteComfyImage', body));
       return;
     }
     sendJson(res, 404, { error: 'Not found' });

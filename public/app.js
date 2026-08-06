@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.11';
+  const APP_VERSION = '10.12';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -145,6 +145,14 @@
       case 'reportCapabilities':
         url = '/api/report-capabilities';
         init = { method: 'POST', headers: json(), body: JSON.stringify({ caps: (params && params.caps) || {} }) };
+        break;
+      case 'comfyImage':
+        url = '/api/comfy-image';
+        init = { method: 'POST', headers: json(), body: JSON.stringify({ path: (params && params.path) || '' }) };
+        break;
+      case 'deleteComfyImage':
+        url = '/api/images/delete';
+        init = { method: 'POST', headers: json(), body: JSON.stringify({ path: (params && params.path) || '' }) };
         break;
       default:
         throw new Error('未知方法: ' + method);
@@ -838,7 +846,7 @@
     el.className = 'msg user';
     let imgs = '';
     if (images && images.length) {
-      imgs = '<div class="imgs">' + images.map(u => '<img src="' + u + '">').join('') + '</div>';
+      imgs = '<div class="imgs">' + images.map(u => '<span class="agent-img"><img src="' + escapeHtml(u) + '" data-save="' + escapeHtml(u) + '"><button class="img-save-btn">保存到相册</button></span>').join('') + '</div>';
     }
     el.innerHTML = '<div class="wrap">' + imgs + '<div class="bubble">' + escapeHtml(text) + '</div></div>' +
       '<div class="msg-actions">' +
@@ -874,7 +882,7 @@
     if (d.kind === 'text') {
       block.classList.add('agent-text');
       if (d.typing) block.classList.add('typing'); else block.classList.remove('typing');
-      block.textContent = d.text || '';
+      block.innerHTML = renderAgentTextWithImages(d.text || '');
     } else if (d.kind === 'cmd') {
       block.className = 'block cmd';
       block.innerHTML = '<div class="cmd-line">🔧 ' + escapeHtml(d.label || '正在执行电脑命令…') +
@@ -888,6 +896,93 @@
       block.textContent = '🔧 ' + (d.label || d.status || '工具调用');
     }
   }
+
+  // 把 AI 回复里的 ![说明](图片地址) 渲染成图片 + 保存按钮（其余内容保持转义）
+  function renderAgentTextWithImages(text) {
+    const parts = String(text || '').split(/!\[([^\]]*)\]\(([^)]+)\)/);
+    let html = '';
+    for (let i = 0; i < parts.length; i += 3) {
+      html += escapeHtml(parts[i] || '');
+      if (parts[i + 1] !== undefined) {
+        const src = parts[i + 2] || '';
+        const auto = String(src).indexOf('/uploads/comfy-') === 0 ? ' data-auto="1"' : '';
+        html += '<span class="agent-img"><img src="' + escapeHtml(src) + '" loading="lazy" data-save="' + escapeHtml(src) + '"' + auto + '><button class="img-save-btn">保存到相册</button></span>';
+      }
+    }
+    return html;
+  }
+
+  // 保存图片到手机相册；成功后通知电脑删除 uploads 里的 comfy-* 副本（数据只留手机端）
+  function saveImageToDevice(src) {
+    let url = src;
+    if (url && url.indexOf('/') === 0 && url.indexOf('//') !== 0 && !/^data:/.test(url)) {
+      try { url = location.origin + url; } catch (_) {}
+    }
+    try {
+      if (window.AndroidBridge && window.AndroidBridge.saveImageToGallery) {
+        const r = window.AndroidBridge.saveImageToGallery(url);
+        if (r === 'ok') {
+          showToast('已保存到相册');
+          const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(url);
+          if (m) apiCall('deleteComfyImage', { path: '/uploads/' + m[1] }).catch(() => {});
+          return true;
+        }
+        showToast('保存失败: ' + (r || '未知错误'), true);
+        return false;
+      }
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'image.png';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      showToast('已开始下载');
+      return true;
+    } catch (e) {
+      showToast('保存失败: ' + (e && e.message), true);
+      return false;
+    }
+  }
+
+  // 中继模式取不到 /uploads 图片，走中继通道换 dataURL
+  function fetchComfyDataUrl(path) {
+    return apiCall('comfyImage', { path }).then(r => (r && r.dataUrl) || null).catch(() => null);
+  }
+
+  // 生成图片自动保存（仅在手机端且为 comfy-* 生成图时）
+  function autoSaveComfyImage(img) {
+    if (!window.AndroidBridge || !window.AndroidBridge.saveImageToGallery) return;
+    if (!img.dataset || img.dataset.auto !== '1' || img.dataset.autoSaved) return;
+    const src = img.src || img.dataset.save || '';
+    if (!src || String(src).indexOf('/uploads/comfy-') === 0) return; // 中继未取到 dataURL 前不自动存
+    img.dataset.autoSaved = '1';
+    saveImageToDevice(src);
+  }
+
+  // 图片区事件：保存按钮 / 加载完成自动保存 / 中继取图失败换 dataURL
+  messagesEl.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest ? e.target.closest('.img-save-btn') : null;
+    if (btn) {
+      const img = btn.parentNode && btn.parentNode.querySelector('img');
+      if (img && img.src) saveImageToDevice(img.src);
+    }
+  });
+  messagesEl.addEventListener('load', (e) => {
+    const img = e.target;
+    if (img && img.tagName === 'IMG') autoSaveComfyImage(img);
+  }, true);
+  messagesEl.addEventListener('error', (e) => {
+    const img = e.target;
+    if (img && img.tagName === 'IMG' && img.dataset && img.dataset.save &&
+        String(img.dataset.save).indexOf('/uploads/comfy-') === 0) {
+      fetchComfyDataUrl(img.dataset.save).then((dataUrl) => {
+        if (dataUrl && img.src !== dataUrl) {
+          img.src = dataUrl;
+          img.dataset.save = dataUrl;
+        }
+      });
+    }
+  }, true);
 
   function scrollBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
