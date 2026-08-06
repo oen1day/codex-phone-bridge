@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.12';
+  const APP_VERSION = '10.13';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -905,14 +905,14 @@
       html += escapeHtml(parts[i] || '');
       if (parts[i + 1] !== undefined) {
         const src = parts[i + 2] || '';
-        const auto = String(src).indexOf('/uploads/comfy-') === 0 ? ' data-auto="1"' : '';
-        html += '<span class="agent-img"><img src="' + escapeHtml(src) + '" loading="lazy" data-save="' + escapeHtml(src) + '"' + auto + '><button class="img-save-btn">保存到相册</button></span>';
+        const comfy = String(src).indexOf('/uploads/comfy-') === 0 ? ' data-comfy="1"' : '';
+        html += '<span class="agent-img"><img src="' + escapeHtml(src) + '" loading="lazy" data-save="' + escapeHtml(src) + '"' + comfy + '><button class="img-save-btn">保存到相册</button></span>';
       }
     }
     return html;
   }
 
-  // 保存图片到手机相册；成功后通知电脑删除 uploads 里的 comfy-* 副本（数据只留手机端）
+  // 仅用户点击“保存到相册”时写入系统相册（不再自动保存）
   function saveImageToDevice(src) {
     let url = src;
     if (url && url.indexOf('/') === 0 && url.indexOf('//') !== 0 && !/^data:/.test(url)) {
@@ -923,8 +923,6 @@
         const r = window.AndroidBridge.saveImageToGallery(url);
         if (r === 'ok') {
           showToast('已保存到相册');
-          const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(url);
-          if (m) apiCall('deleteComfyImage', { path: '/uploads/' + m[1] }).catch(() => {});
           return true;
         }
         showToast('保存失败: ' + (r || '未知错误'), true);
@@ -949,17 +947,61 @@
     return apiCall('comfyImage', { path }).then(r => (r && r.dataUrl) || null).catch(() => null);
   }
 
-  // 生成图片自动保存（仅在手机端且为 comfy-* 生成图时）
-  function autoSaveComfyImage(img) {
-    if (!window.AndroidBridge || !window.AndroidBridge.saveImageToGallery) return;
-    if (!img.dataset || img.dataset.auto !== '1' || img.dataset.autoSaved) return;
-    const src = img.src || img.dataset.save || '';
-    if (!src || String(src).indexOf('/uploads/comfy-') === 0) return; // 中继未取到 dataURL 前不自动存
-    img.dataset.autoSaved = '1';
-    saveImageToDevice(src);
+  // App 内缓存映射：uploads/comfy-xxx.png -> 手机私有缓存文件（重载对话时恢复显示）
+  function loadComfyImgCache() {
+    try { return JSON.parse(localStorage.getItem('comfyImgCache') || '{}') || {}; } catch (_) { return {}; }
+  }
+  function saveComfyImgCache(map) {
+    try { localStorage.setItem('comfyImgCache', JSON.stringify(map)); } catch (_) {}
   }
 
-  // 图片区事件：保存按钮 / 加载完成自动保存 / 中继取图失败换 dataURL
+  // 生成图渲染成功后下载到 App 私有缓存（最多 10 张），并通知电脑删除 uploads 副本
+  function cacheGeneratedImage(img) {
+    if (!window.AndroidBridge || !window.AndroidBridge.cacheImageToApp) return;
+    if (!img || !img.dataset || img.dataset.comfy !== '1' || img.dataset.cached) return;
+    img.dataset.cached = '1';
+    const orig = img.dataset.save || '';
+    const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(orig);
+    const src = img.src || orig || '';
+    if (String(src).indexOf('file://') === 0) {
+      // 已从本地缓存恢复：只删电脑副本
+      if (m) apiCall('deleteComfyImage', { path: '/uploads/' + m[1] }).catch(() => {});
+      return;
+    }
+    let url = src;
+    if (url.indexOf('/') === 0 && url.indexOf('//') !== 0 && !/^data:/.test(url)) {
+      try { url = location.origin + url; } catch (_) {}
+    }
+    try {
+      const p = window.AndroidBridge.cacheImageToApp(url);
+      if (p && p.length > 4) {
+        if (m) {
+          const map = loadComfyImgCache();
+          map[m[1]] = p;
+          saveComfyImgCache(map);
+          apiCall('deleteComfyImage', { path: '/uploads/' + m[1] }).catch(() => {});
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 图片渲染失败时恢复：先查 App 缓存（file://），再走中继通道取 dataURL
+  function resolveComfyImg(img) {
+    const orig = img.dataset && img.dataset.save;
+    if (String(orig).indexOf('/uploads/comfy-') !== 0) return;
+    const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(orig);
+    if (!m) return;
+    const map = loadComfyImgCache();
+    if (map[m[1]]) {
+      img.src = 'file://' + String(map[m[1]]).replace(/\\/g, '/');
+      return;
+    }
+    fetchComfyDataUrl(orig).then((dataUrl) => {
+      if (dataUrl && img.src !== dataUrl) img.src = dataUrl;
+    });
+  }
+
+  // 图片区事件：保存按钮 / 生成图缓存到 App / 中继取图失败换 dataURL 或本地缓存
   messagesEl.addEventListener('click', (e) => {
     const btn = e.target && e.target.closest ? e.target.closest('.img-save-btn') : null;
     if (btn) {
@@ -969,18 +1011,13 @@
   });
   messagesEl.addEventListener('load', (e) => {
     const img = e.target;
-    if (img && img.tagName === 'IMG') autoSaveComfyImage(img);
+    if (img && img.tagName === 'IMG') cacheGeneratedImage(img);
   }, true);
   messagesEl.addEventListener('error', (e) => {
     const img = e.target;
     if (img && img.tagName === 'IMG' && img.dataset && img.dataset.save &&
         String(img.dataset.save).indexOf('/uploads/comfy-') === 0) {
-      fetchComfyDataUrl(img.dataset.save).then((dataUrl) => {
-        if (dataUrl && img.src !== dataUrl) {
-          img.src = dataUrl;
-          img.dataset.save = dataUrl;
-        }
-      });
+      resolveComfyImg(img);
     }
   }, true);
 
@@ -1572,7 +1609,7 @@
   }
 
   const COMFY_PLACEHOLDER_SVG =
-    '<svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg">' +
+    '<svg width="320" height="200" viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg">' +
     '<defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0e1a24"/><stop offset="1" stop-color="#14332d"/></linearGradient></defs>' +
     '<rect width="320" height="200" fill="url(#cg)"/>' +
     '<circle cx="58" cy="42" r="2.2" fill="#9fd9c8"/><circle cx="132" cy="24" r="1.6" fill="#9fd9c8"/><circle cx="232" cy="48" r="2" fill="#9fd9c8"/><circle cx="282" cy="30" r="1.5" fill="#9fd9c8"/><circle cx="182" cy="18" r="1.8" fill="#9fd9c8"/>' +

@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.12";
+    private static final String APP_VERSION = "10.13";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -254,7 +254,10 @@ public class MainActivity extends Activity {
                 }
                 final byte[] data;
                 final String ext;
-                if (url.startsWith("data:image")) {
+                if (url.startsWith("file://")) {
+                    data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(url.substring("file://".length())));
+                    ext = url.endsWith(".jpg") ? ".jpg" : ".png";
+                } else if (url.startsWith("data:image")) {
                     String b64 = url.substring(url.indexOf(',') + 1);
                     data = Base64.decode(b64, Base64.DEFAULT);
                     ext = url.startsWith("data:image/jpeg") ? ".jpg" : ".png";
@@ -294,6 +297,61 @@ public class MainActivity extends Activity {
                 return "ok";
             } catch (Exception e) {
                 return "保存失败: " + (e.getMessage() == null ? e.toString() : e.getMessage());
+            }
+        }
+
+        // 生成图缓存到 App 私有目录（最多 10 张，超出删最旧），返回本地路径
+        @JavascriptInterface
+        public String cacheImageToApp(String url) {
+            try {
+                if (url == null || url.isEmpty()) return "";
+                byte[] data;
+                String ext = ".png";
+                if (url.startsWith("data:image")) {
+                    String b64 = url.substring(url.indexOf(',') + 1);
+                    data = Base64.decode(b64, Base64.DEFAULT);
+                    if (url.startsWith("data:image/jpeg")) ext = ".jpg";
+                } else if (url.startsWith("file://")) {
+                    String path = url.substring("file://".length());
+                    if (!path.startsWith(getFilesDir().getAbsolutePath())) return "";
+                    data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path));
+                } else {
+                    java.net.URL u = new java.net.URL(url);
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection) u.openConnection();
+                    c.setConnectTimeout(10000);
+                    c.setReadTimeout(30000);
+                    c.setRequestProperty("User-Agent", "codex-phone-bridge");
+                    java.io.InputStream in = c.getInputStream();
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                    in.close();
+                    data = bos.toByteArray();
+                    String ct = c.getContentType();
+                    if (ct != null && ct.contains("jpeg")) ext = ".jpg";
+                    c.disconnect();
+                }
+                File dir = new File(getFilesDir(), "images");
+                if (!dir.exists()) dir.mkdirs();
+                String name = "img_" + System.currentTimeMillis() + ext;
+                File f = new File(dir, name);
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                fos.write(data);
+                fos.close();
+                // 缓存上限 10 张，超出删最旧
+                File[] files = dir.listFiles();
+                if (files != null && files.length > 10) {
+                    java.util.Arrays.sort(files, new java.util.Comparator<java.io.File>() {
+                        @Override public int compare(java.io.File a, java.io.File b) {
+                            return Long.compare(a.lastModified(), b.lastModified());
+                        }
+                    });
+                    for (int i = 0; i < files.length - 10; i++) files[i].delete();
+                }
+                return f.getAbsolutePath();
+            } catch (Exception e) {
+                return "";
             }
         }
 

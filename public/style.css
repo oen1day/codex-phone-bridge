@@ -402,10 +402,14 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   background: var(--surface-deep);
   box-shadow: 0 0 18px rgba(0, 210, 160, 0.12);
 }
+.comfy-placeholder {
+  width: 100%;
+  aspect-ratio: 320 / 200;
+}
 .comfy-placeholder svg {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
   filter: blur(6px);
   animation: comfy-breathe 2.6s ease-in-out infinite;
 }
