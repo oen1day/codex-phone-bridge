@@ -106,7 +106,9 @@ function loadConfig() {
     ttsTimeoutMs: 300000,
     comfyUrl: 'http://127.0.0.1:8188',
     comfyWorkflows: '',
-    comfyInputDir: ''
+    comfyInputDir: '',
+    comfyApiKey: '',
+    comfyAuthToken: ''
   }, cfg);
   if (!merged.workspace) merged.workspace = docs;
   if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
@@ -114,6 +116,8 @@ function loadConfig() {
   if (!merged.comfyUrl) merged.comfyUrl = 'http://127.0.0.1:8188';
   if (!merged.comfyWorkflows) merged.comfyWorkflows = path.join(ROOT, 'comfy-workflows');
   if (!merged.comfyInputDir) merged.comfyInputDir = '';
+  if (!merged.comfyApiKey) merged.comfyApiKey = '';
+  if (!merged.comfyAuthToken) merged.comfyAuthToken = '';
   return merged;
 }
 
@@ -1228,11 +1232,14 @@ async function comfyGenerate(params) {
 
   const clientId = crypto.randomBytes(8).toString('hex');
   let promptId = null;
+  const extraData = {};
+  if (config.comfyAuthToken) extraData.auth_token_comfy_org = config.comfyAuthToken;
+  if (config.comfyApiKey) extraData.api_key_comfy_org = config.comfyApiKey;
   try {
     const r = await fetch(config.comfyUrl + '/prompt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: graph, client_id: clientId })
+      body: JSON.stringify({ prompt: graph, client_id: clientId, extra_data: extraData })
     });
     if (!r.ok) {
       const txt = await r.text();

@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# 不使用全局 ErrorActionPreference=Stop：避免 node 的 stderr 把整个脚本打断
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Find-LatestFile($pattern) {
@@ -55,7 +55,11 @@ if (-not (Test-Path $cfgPath)) {
   Write-Host '首次启动：尚未找到配置文件，将由程序自动生成配对码/密码/密钥…' -ForegroundColor Yellow
   $cfg = [pscustomobject]@{ port = 8787 }
 } else {
-  $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
+  try {
+    $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
+  } catch {
+    $cfg = [pscustomobject]@{ port = 8787 }
+  }
 }
 
 Write-Host ''
@@ -75,14 +79,16 @@ Write-Host ''
 $logDir = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $bridgeLog = Join-Path $logDir 'bridge.log'
+$bridgeErr = Join-Path $logDir 'bridge.log.err'
 $restartLeft = 3
 while ($restartLeft -gt 0) {
-  & $node (Join-Path $root 'server.js') 2>&1 | Tee-Object -FilePath $bridgeLog -Append
-  $code = $LASTEXITCODE
+  $p = Start-Process -FilePath $node -ArgumentList @((Join-Path $root 'server.js')) -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeErr -NoNewWindow -PassThru
+  $p.WaitForExit()
+  $code = $p.ExitCode
   if ($code -eq 0) { break }
   $restartLeft--
   Write-Host ''
-  Write-Host "服务异常退出（退出码 $code），日志见 logs\bridge.log" -ForegroundColor Red
+  Write-Host "服务异常退出（退出码 $code），日志见 logs\bridge.log / logs\bridge.log.err" -ForegroundColor Red
   if ($restartLeft -gt 0) {
     Write-Host "5 秒后自动重启，剩余 $restartLeft 次机会（按 Ctrl+C 取消）" -ForegroundColor Yellow
     Start-Sleep -Seconds 5
