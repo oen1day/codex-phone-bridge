@@ -174,7 +174,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '10.10' }
+        serverInfo: { name: 'codex-phone-bridge', version: '10.11' }
       }
     });
     return;

@@ -5,6 +5,7 @@ android/debug.keystore
 android/assets/www/
 uploads/
 phone-threads.json
+phone-caps.json
 paths.json
 config.json
 make-release-zip.ps1

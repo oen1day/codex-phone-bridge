@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.10';
+  const APP_VERSION = '10.11';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -141,6 +141,10 @@
       case 'ttsStatus':
         url = '/api/tts/status';
         init = { method: 'POST', headers: json(), body: JSON.stringify({ text: (params && params.text) || '' }) };
+        break;
+      case 'reportCapabilities':
+        url = '/api/report-capabilities';
+        init = { method: 'POST', headers: json(), body: JSON.stringify({ caps: (params && params.caps) || {} }) };
         break;
       default:
         throw new Error('未知方法: ' + method);
