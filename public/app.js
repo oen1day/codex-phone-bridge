@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.24';
+  const APP_VERSION = '10.25';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -635,7 +635,7 @@
         state.threadPage = { hasMore: false, nextCursor: 0, loading: false };
         stopTurnPolling();
         stopTurnWatchdog();
-        messagesEl.innerHTML = '';
+        clearMessagesPreserveComfyStack();
         approvalArea.innerHTML = '';
         state.blocks.clear();
         chatTitle.textContent = '新对话';
@@ -683,7 +683,7 @@
     speakButtons.clear();
     state.approvals.clear();
     approvalArea.innerHTML = '';
-    messagesEl.innerHTML = '';
+    clearMessagesPreserveComfyStack();
     const t = state.threads.find(x => x.id === id);
     chatTitle.textContent = (t && (t.name || t.title || t.preview)) || '对话中…';
     renderThreads();
@@ -727,7 +727,7 @@
       }
       $('interruptBtn').classList.toggle('hidden', !state.running);
       clearTimeout(ticker);
-      messagesEl.innerHTML = '';
+      clearMessagesPreserveComfyStack();
       renderHistory(state.pageTurns);
       scrollBottom();
       restoreSpeakBtnState();
@@ -784,7 +784,7 @@
       state.threadPage = { hasMore: !!data.hasMore, nextCursor: data.nextCursor || 0, loading: false };
       state.blocks.clear();
       speakButtons.clear();
-      messagesEl.innerHTML = '';
+      clearMessagesPreserveComfyStack();
       renderHistory(merged);
       // 保持视口位置：新加载的旧消息追加在顶部
       messagesEl.scrollTop = messagesEl.scrollHeight - prevScrollHeight + prevScrollTop;
@@ -1375,8 +1375,11 @@
     } else if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall' || item.type === 'webSearch') {
       const label = friendlyToolLabel(item);
       addBlock(agentEl, { kind: 'tool', id: item.id, label, status: '进行中' });
-      // 卡片双保险：comfyStarted 未到前，只要检测到 AI 在调 generate_image 就主动显示占位卡
-      if (/generate_image/i.test(String(item.tool || item.name || '')) && comfyCards.size === 0) startComfyProgress('tool-' + item.id);
+      // 卡片双保险：没有等待绑定的预创建卡时，检测到 generate_image 就兜底建卡
+      if (/generate_image/i.test(String(item.tool || item.name || ''))) {
+        const hasUnbound = [...comfyCards.values()].some(r => !r.bound);
+        if (!hasUnbound) startComfyProgress('tool-' + item.id);
+      }
     }
   }
 
@@ -1428,7 +1431,7 @@
       speakButtons.clear();
       state.approvals.clear();
       approvalArea.innerHTML = '';
-      messagesEl.innerHTML = '';
+      clearMessagesPreserveComfyStack();
       const thName = thread.name || thread.title || thread.preview;
       if (thName) chatTitle.textContent = thName;
       if (thread.status && thread.status.type === 'active') {
@@ -1457,7 +1460,7 @@
     speakButtons.clear();
     state.approvals.clear();
     approvalArea.innerHTML = '';
-    messagesEl.innerHTML = '';
+    clearMessagesPreserveComfyStack();
     const thName = thread.name || thread.title || thread.preview;
     if (thName) chatTitle.textContent = thName;
     if (thread.status && thread.status.type === 'active') {
@@ -1851,19 +1854,18 @@
     '<path d="M200 164 Q208 146 206 128 Q212 138 218 130 Q224 142 228 164 Z" fill="#7fd4bd" opacity="0.8"/>' +
     '</svg>';
 
-  // 卡片状态：queued（排队中，无计时）→ generating（计时+百分比）→ fading（抽走动画中）
+  // 卡片状态：queued（排队中）→ generating（顶层计时）→ done（完成/失败，半透明留在堆里，回合结束统一清理）
   const comfyCards = new Map(); // 插入序 key -> { id, promptId, card, badge, timer, startTs, pct, state, seq, fading, rising, bound }
   let comfySeq = 0;
   let comfyStackEl = null;
 
-  // 堆叠容器独立于消息列表：挂在 #messages 之外（同父级、紧跟其后），
-  // 这样切换对话/清空历史消息不会抹掉生成中的卡片。
+  // 堆叠容器嵌在消息流内（#messages 末尾），随消息滚动；
+  // 切换对话不清卡：清空消息区时先摘走容器，清完再挂回，卡片与计时不丢。
   function ensureComfyStack() {
     if (!comfyStackEl || !comfyStackEl.parentNode) {
       comfyStackEl = document.createElement('div');
       comfyStackEl.className = 'comfy-stack';
-      const host = (messagesEl && messagesEl.parentNode) ? messagesEl.parentNode : document.body;
-      host.insertBefore(comfyStackEl, messagesEl ? messagesEl.nextSibling : null);
+      (messagesEl || document.body).appendChild(comfyStackEl);
     }
     // 兜底重挂：容器/卡片 DOM 意外丢失但仍有生成任务时，按 Map 恢复每张卡
     for (const rec of comfyCards.values()) {
@@ -1881,7 +1883,20 @@
   function restoreComfyStackIfNeeded() {
     if (comfyCards.size === 0) return;
     ensureComfyStack();
+    // 确保堆叠在消息流末尾（渲染历史可能把消息追加到它后面）
+    if (comfyStackEl && comfyStackEl.parentNode && comfyStackEl.parentNode.lastChild !== comfyStackEl) {
+      comfyStackEl.parentNode.appendChild(comfyStackEl);
+    }
     scrollBottom();
+  }
+
+  // 清空消息区但保留生成中的堆叠：先摘走容器，清空后立即挂回末尾
+  function clearMessagesPreserveComfyStack() {
+    if (comfyStackEl && comfyStackEl.parentNode === messagesEl) {
+      comfyStackEl.parentNode.removeChild(comfyStackEl);
+    }
+    messagesEl.innerHTML = '';
+    if (comfyStackEl && comfyCards.size > 0) messagesEl.appendChild(comfyStackEl);
   }
 
   function removeComfyStackIfEmpty() {
@@ -1898,8 +1913,9 @@
     return null;
   }
 
-  // 纸张堆叠布局：按加入顺序逐张向右下偏移 8px；生成中的卡在最上层（zIndex 最高、不透明），
-  // 下层半透明只露边角、徽标隐藏；淡出中的卡保持透明直到被移除；上浮中的卡保持动画原位。
+  // 纸张堆叠布局：生成中的卡在最上层（slot 0、zIndex 最高、不透明），
+  // 其余（排队/完成）依次向右下偏移 8px、半透明只露边角、徽标隐藏；
+  // 动画中的卡（rising/fading）保持原位；全部完成无顶层时从 slot 0 起排。
   function reflowComfyStack() {
     if (!comfyStackEl) return;
     const recs = [...comfyCards.values()];
@@ -1907,15 +1923,17 @@
     for (const c of recs) {
       if (c.state === 'generating' && !c.fading) { top = c; break; }
     }
-    recs.forEach((rec, i) => {
-      if (rec.rising) return;
+    let nonTopSlot = top ? 1 : 0;
+    for (const rec of recs) {
+      if (rec.rising || rec.fading) continue;
       const isTop = rec === top;
-      rec.card.style.left = (i * 8) + 'px';
-      rec.card.style.top = (i * 8) + 'px';
-      rec.card.style.zIndex = isTop ? String(recs.length + 1) : String(i + 1);
-      rec.card.style.opacity = isTop ? '1' : (rec.fading ? '0' : '0.45');
+      const slot = isTop ? 0 : nonTopSlot++;
+      rec.card.style.left = (slot * 8) + 'px';
+      rec.card.style.top = (slot * 8) + 'px';
+      rec.card.style.zIndex = isTop ? String(recs.length + 1) : String(slot + 1);
+      rec.card.style.opacity = isTop ? '1' : '0.45';
       if (rec.badge) rec.badge.style.display = isTop ? '' : 'none';
-    });
+    }
     comfyStackEl.style.height = (recs.length > 0 ? ((recs.length - 1) * 8 + 180) : 0) + 'px';
   }
 
@@ -1928,6 +1946,8 @@
       rec.badge.textContent = '准备中';
     } else if (rec.state === 'queued') {
       rec.badge.textContent = '排队中';
+    } else if (rec.state === 'done') {
+      rec.badge.textContent = '已完成';
     }
   }
 
@@ -1948,16 +1968,37 @@
     return next;
   }
 
-  // 从发送文本解析“两张/三张/N张图”，命中且 >=2 才预创建；无法确定时返回 0 走原逻辑
+  function parseChineseNum(w) {
+    const numMap = { 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12, 十三: 13, 十四: 14, 十五: 15, 十六: 16, 十七: 17, 十八: 18, 十九: 19, 二十: 20 };
+    if (numMap[w] != null) return numMap[w];
+    const n = parseInt(w, 10);
+    return isNaN(n) ? 0 : n;
+  }
+
+  // 解析图片数量：1) 显式数量词（两张/三个/2版…）+ 图/版本/对比/一起语境；
+  // 2) 对比/放一起/分别 句式按列出的对象数推断；3) 多图暗示词兜底 2 张。
+  // 命中且 >=2 才预创建；无法确定时返回 0 走原逻辑。
   function parseImageCount(text) {
     const s = String(text || '');
-    if (!/图|图片|照片|壁纸|插画|封面|图集|组图|头像|海报|漫画/.test(s)) return 0;
-    const m = s.match(/(\d+|两|二|三|四|五|六|七|八|九|十|十一|十二|十三|十四|十五|十六|十七|十八|十九|二十)\s*张/);
-    if (!m) return 0;
-    const numMap = { 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12, 十三: 13, 十四: 14, 十五: 15, 十六: 16, 十七: 17, 十八: 18, 十九: 19, 二十: 20 };
-    let n = numMap[m[1]] != null ? numMap[m[1]] : parseInt(m[1], 10);
-    if (!(n >= 2)) return 0;
-    return Math.min(n, 9); // 防止一次叠太多张，超出部分由 comfyStarted 兜底逐张补卡
+    // 1) 显式数量
+    const m = s.match(/(\d+|两|二|三|四|五|六|七|八|九|十|十一|十二|十三|十四|十五|十六|十七|十八|十九|二十)\s*(张|个|种|版|套)/);
+    if (m && /图|图片|版本|对比|一起|放一起|壁纸|插画|封面|照片|分镜|效果/.test(s)) {
+      const n = parseChineseNum(m[1]);
+      if (n >= 2) return Math.min(n, 9);
+    }
+    // 2) 对比/放一起/分别：按列出的对象数推断（“默认和分镜版”=2，“默认、分镜、电影感”=3）
+    if (/对比|放一起|放在一起|一起出|一起看|分别/.test(s)) {
+      // “分别”后跟列出的对象；对比类取关键词前不含逗号的最后一个片段
+      const listPart = /分别/.test(s)
+        ? s.split(/分别/).pop()
+        : ((s.match(/([^，。！？\n]{1,40}?)(?:对比|放一起|放在一起|一起出|一起看)/) || [])[1] || '');
+      const tokens = listPart.split(/和|与|、|,|，|\s*\/\s*/).map(t => t.trim()).filter(Boolean);
+      if (tokens.length >= 2) return Math.min(tokens.length, 9);
+    }
+    // 3) 明确单张不预创建；多图暗示词兜底 2 张
+    if (/一\s*(张|个|种|版)|1\s*(张|个|种|版)/.test(s)) return 0;
+    if (/多张|多个|几种|几版|几个版本|分别生成|多版本|对比|一起|放一起/.test(s)) return 2;
+    return 0;
   }
 
   function makeComfyCard() {
@@ -2016,6 +2057,18 @@
       scrollBottom();
       return;
     }
+    // 真实 promptId 到达时，优先改绑兜底建的 tool 卡，避免同一张生成出现两张卡
+    if (!String(id).startsWith('tool-')) {
+      let toolRec = null;
+      for (const rec of comfyCards.values()) {
+        if (rec.bound && String(rec.promptId || '').indexOf('tool-') === 0) { toolRec = rec; break; }
+      }
+      if (toolRec) {
+        toolRec.promptId = id;
+        reflowComfyStack();
+        return;
+      }
+    }
     // 无预创建（单图/数量未命中/超出预创建上限）：按原逻辑新建一张
     let generating = null;
     for (const c of comfyCards.values()) if (c.state === 'generating') { generating = c; break; }
@@ -2061,32 +2114,38 @@
     }
     const rec = comfyFind(id);
     if (!rec) return;
-    removeComfyCard(rec);
+    completeComfyCard(rec);
   }
 
-  function removeComfyCard(rec) {
+  // 完成/失败：不抽走移除，改为“下沉留在堆里”（done，半透明），下一张上浮；
+  // 整叠卡片等回合结束统一清理，保证串行多图时堆叠视觉不中断。
+  function completeComfyCard(rec) {
     if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
-    const finishRemove = () => {
-      if (rec.card && rec.card.parentNode) rec.card.parentNode.removeChild(rec.card);
-      comfyCards.delete(rec.id);
+    const finishState = () => {
+      rec.state = 'done';
+      rec.fading = false;
       promoteNextComfyCard();
-      removeComfyStackIfEmpty();
       reflowComfyStack();
     };
-    // 排队中的卡（不在顶层）直接移除，不做抽走动效
-    if (rec.state !== 'generating') { finishRemove(); return; }
+    // 排队中的卡（从未在顶层）直接标记完成
+    if (rec.state !== 'generating') {
+      rec.state = 'done';
+      reflowComfyStack();
+      return;
+    }
     const hasQueued = [...comfyCards.values()].some(c => c.state === 'queued');
-    const startDraw = () => {
-      if (!rec.card || !rec.card.parentNode) { finishRemove(); return; }
+    const startSink = () => {
+      if (!rec.card || !rec.card.parentNode) { finishState(); return; }
       rec.fading = true;
-      // 顶层抽走：向右上角平移并淡出
-      rec.card.style.zIndex = '999';
-      rec.card.style.transition = 'opacity .55s ease, transform .55s ease';
-      rec.card.style.opacity = '0';
-      rec.card.style.transform = 'translate(10px, -10px) scale(0.98)';
+      rec.card.style.transition = 'opacity .5s ease, left .5s ease, top .5s ease';
+      rec.card.style.opacity = '0.45';
       // 下一张同时从背后上浮到顶层（位置/不透明度/缩放连续过渡）
       const next = findNextQueued();
       if (next) {
+        // 完成的卡下沉一层（右下 8px），下一张上浮到 slot 0
+        rec.card.style.left = '8px';
+        rec.card.style.top = '8px';
+        rec.card.style.zIndex = '1';
         next.rising = true;
         next.card.style.transition = 'none';
         next.card.style.transform = 'translate(0, 6px) scale(0.97)';
@@ -2094,6 +2153,7 @@
         next.card.style.transition = 'opacity .55s ease, transform .55s ease, left .55s ease, top .55s ease';
         next.card.style.left = '0px';
         next.card.style.top = '0px';
+        next.card.style.zIndex = '999';
         next.card.style.opacity = '1';
         next.card.style.transform = 'none';
         if (next.badge) next.badge.style.display = '';
@@ -2103,11 +2163,11 @@
           next.badge.textContent = '排队中';
         }
       }
-      setTimeout(finishRemove, 560);
+      setTimeout(finishState, 520);
     };
-    // 生成中卡最短可见约 1.5 秒（无排队时）；有排队则立即抽走，下一张跟上
+    // 生成中卡最短可见约 1.5 秒（无排队时）；有排队则立即下沉，下一张跟上
     const wait = (!hasQueued) ? Math.max(0, 1500 - (Date.now() - rec.startTs)) : 0;
-    if (wait > 0) { setTimeout(startDraw, wait); } else { startDraw(); }
+    if (wait > 0) { setTimeout(startSink, wait); } else { startSink(); }
   }
 
   function promoteNextComfyCard() {

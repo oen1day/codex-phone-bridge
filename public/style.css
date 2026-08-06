@@ -401,8 +401,10 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
 }
 .comfy-stack {
   position: relative;
-  margin: 0 12px 12px;
+  margin: 4px 0 12px;
   max-width: 86%;
+  order: 9999;
+  margin-top: auto;
 }
 .comfy-stack .comfy-generating {
   position: absolute;
