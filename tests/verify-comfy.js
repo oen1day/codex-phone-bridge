@@ -40,6 +40,9 @@ check('app.js 处理 comfyProgress', app.includes("method === 'comfyProgress'") 
 check('app.js 处理 comfyStarted', app.includes("method === 'comfyStarted'") && app.includes('function startComfyProgress()'));
 check('app.js 有生成卡片计时', app.includes('生成中 ' ) && app.includes('comfyTimer = setInterval'));
 check('app.js 上报能力', app.includes('function reportCapabilities()') && app.includes("'reportCapabilities'"));
+check('app.js lanCall 支持能力上报', app.includes("case 'reportCapabilities'"));
+check('server 有上报 HTTP 端点', server.includes("'/api/report-capabilities'"));
+check('能力缓存持久化', server.includes('PHONE_CAPS_PATH') && server.includes('loadPhoneCaps()'));
 check('MCP 有 generate_image', mcp.includes("name: 'generate_image'"));
 check('MCP 默认 gptimage2', mcp.includes("args.workflow || 'gptimage2'"));
 check('MCP 描述强调默认 gptimage2', mcp.includes('除非用户明确要求使用本地 z-image 生成'));

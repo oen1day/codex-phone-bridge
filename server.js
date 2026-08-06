@@ -16,6 +16,7 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 const UPLOAD_DIR = path.join(ROOT, 'uploads');
 const TTS_DIR = path.join(UPLOAD_DIR, 'tts');
 const PHONE_THREADS_PATH = path.join(ROOT, 'phone-threads.json');
+const PHONE_CAPS_PATH = path.join(ROOT, 'phone-caps.json');
 
 // 崩溃兜底：任何漏网的 Promise/异常都不能让整个服务静默退出
 function logBridge(line) {
@@ -128,7 +129,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.10';
+const VERSION = '10.11';
 const BRIDGE_ID_PATH = path.join(os.homedir(), '.codex', 'phone-bridge-id.json');
 function loadBridgeId() {
   try { return JSON.parse(fs.readFileSync(BRIDGE_ID_PATH, 'utf8')) || {}; } catch (_) { return {}; }
@@ -1162,7 +1163,10 @@ function pageThread(thread, limit, before) {
 }
 
 // ---------- ComfyUI 图像生成 ----------
-let phoneCapsCache = {};
+function loadPhoneCaps() {
+  try { return JSON.parse(fs.readFileSync(PHONE_CAPS_PATH, 'utf8')) || {}; } catch (_) { return {}; }
+}
+let phoneCapsCache = loadPhoneCaps();
 
 const COMFY_WORKFLOWS = {
   zimage: 'zimage_direct_api.json',
@@ -1725,6 +1729,7 @@ async function apiDispatch(method, params, clientId) {
       return phoneRpc('getCapabilities', {}, 30000);
     case 'reportCapabilities': {
       phoneCapsCache = (params && params.caps) || {};
+      try { fs.writeFileSync(PHONE_CAPS_PATH, JSON.stringify(phoneCapsCache, null, 2), 'utf8'); } catch (_) {}
       return { ok: true };
     }
     case 'comfyGenerate':
@@ -2028,6 +2033,11 @@ async function handleApi(req, res, url) {
     }
     if (p === '/api/phone/capabilities' && req.method === 'POST') {
       sendJson(res, 200, await apiDispatch('phoneCapabilities', {}));
+      return;
+    }
+    if (p === '/api/report-capabilities' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      sendJson(res, 200, await apiDispatch('reportCapabilities', body));
       return;
     }
     if (p === '/api/comfy/generate' && req.method === 'POST') {
