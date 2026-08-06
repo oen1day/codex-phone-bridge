@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.29";
+    private static final String APP_VERSION = "10.30";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -352,6 +352,61 @@ public class MainActivity extends Activity {
                 return f.getAbsolutePath();
             } catch (Exception e) {
                 return "";
+            }
+        }
+
+        // 下载 AI 生成/修改的文件到 App 私有下载目录（局域网直下 http；dataURL 备用）
+        @JavascriptInterface
+        public String saveFileToPhone(String url, String filename) {
+            try {
+                if (url == null || url.isEmpty()) return "空地址";
+                byte[] data;
+                if (url.startsWith("data:")) {
+                    String b64 = url.substring(url.indexOf(',') + 1);
+                    data = Base64.decode(b64, Base64.DEFAULT);
+                } else {
+                    java.net.URL u = new java.net.URL(url);
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection) u.openConnection();
+                    c.setConnectTimeout(10000);
+                    c.setReadTimeout(60000);
+                    c.setRequestProperty("User-Agent", "codex-phone-bridge");
+                    java.io.InputStream in = c.getInputStream();
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    long total = 0;
+                    while ((n = in.read(buf)) > 0) {
+                        bos.write(buf, 0, n);
+                        total += n;
+                        if (total > 20L * 1024 * 1024) {
+                            in.close();
+                            c.disconnect();
+                            return "文件过大（超过 20MB）";
+                        }
+                    }
+                    in.close();
+                    data = bos.toByteArray();
+                    c.disconnect();
+                }
+                if (data.length == 0) return "文件内容为空";
+                String safe = (filename == null ? "" : filename).replaceAll("[\\\\/:*?\"<>|\\r\\n]", "_").trim();
+                if (safe.isEmpty()) safe = "download_" + System.currentTimeMillis();
+                if (!safe.contains(".")) safe = safe + ".bin";
+                File dir = new File(getFilesDir(), "downloads");
+                if (!dir.exists()) dir.mkdirs();
+                File f = new File(dir, safe);
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                fos.write(data);
+                fos.close();
+                final String shown = safe;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        Toast.makeText(MainActivity.this, "已下载到手机：" + shown, Toast.LENGTH_SHORT).show();
+                    }
+                });
+                return "ok";
+            } catch (Exception e) {
+                return "下载失败: " + (e.getMessage() == null ? e.toString() : e.getMessage());
             }
         }
 

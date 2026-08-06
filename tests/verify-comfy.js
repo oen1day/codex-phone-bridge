@@ -137,6 +137,20 @@ check('style 附件菜单与文件 chips', css.includes('.attach-menu') && css.i
 check('server 处理 body.files', server.includes('(body.files || [])') && server.includes('saveUploadFile(f.data, f.name)'));
 check('server 文本读取传入 codex', server.includes('readUploadedText(file)') && server.includes("【附件：' + label + '】"));
 check('server 附件白名单/大小/清理', server.includes('TEXT_FILE_EXTS') && server.includes('MAX_FILE_BYTES') && server.includes("name.startsWith('upload-')"));
+check('lanCall 发送带 files', app.includes("files: params.files || []"));
+check('server 上传 MIME 覆盖文档', server.includes("'.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'") && server.includes("'.pptx'") && server.includes("'.pdf': 'application/pdf'"));
+check('server 文件下载头 RFC5987', server.includes("filename*=UTF-8''") && server.includes("attachment; filename"));
+check('server 有文件发布接口', server.includes("'/api/file/publish'") && server.includes("case 'filePublish':"));
+check('server 发布白名单/大小/pub- 前缀', server.includes('PUB_FILE_EXTS') && server.includes('MAX_PUB_FILE_BYTES') && server.includes("'pub-' + id + ext"));
+check('server 发布仅限工作目录/uploads', server.includes('仅支持发布工作目录或 uploads 内的文件'));
+check('MCP 有 publish_file 工具', mcp.includes("name: 'publish_file'") && mcp.includes("'/api/file/publish'"));
+check('MCP publish_file 描述带下载语法', mcp.includes('📄 [文件名](返回的url)'));
+check('app 渲染文件下载卡片', app.includes('agent-file') && app.includes('agent-file-btn') && app.includes('downloadAgentFile'));
+check('app 文件下载中继提示', app.includes('中继模式暂不支持下载文件'));
+check('app 调用原生保存文件', app.includes('saveFileToPhone'));
+check('style 有文件下载卡片', css.includes('.agent-file') && css.includes('.agent-file-btn'));
+check('Java 有保存文件方法', java.includes('saveFileToPhone') && java.includes('getFilesDir(), "downloads"'));
+check('AI 行为规范要求发布文件', server.includes('publish_file 工具') && server.includes('📄 [文件名](链接)'));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

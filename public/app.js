@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.29';
+  const APP_VERSION = '10.30';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -128,7 +128,7 @@
         break;
       case 'turnStart':
         url = '/api/threads/' + encodeURIComponent(params.threadId) + '/turns';
-        init = { method: 'POST', headers: json(), body: JSON.stringify({ text: params.text, images: params.images || [] }) };
+        init = { method: 'POST', headers: json(), body: JSON.stringify({ text: params.text, images: params.images || [], files: params.files || [] }) };
         break;
       case 'interrupt':
         url = '/api/threads/' + encodeURIComponent(params.threadId) + '/interrupt';
@@ -936,14 +936,20 @@
     const parts = normalized.split(/!\[([^\]]*)\]\(([^)]+)\)/);
     let html = '';
     for (let i = 0; i < parts.length; i += 3) {
-      html += escapeHtml((parts[i] || '').replace(/^!/, '')); // 清掉解析残留的孤立感叹号
+      html += escapeHtml((parts[i] || '').replace(/^!/, '').replace(/📄\s*$/, '')); // 清掉解析残留的孤立感叹号和文件图标
       if (parts[i + 1] !== undefined) {
         const src = parts[i + 2] || '';
         const alt = (parts[i + 1] || '').trim() || '图片';
-        const comfy = String(src).indexOf('/uploads/comfy-') === 0 ? ' data-comfy="1"' : '';
-        html += '<span class="agent-img"><img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt) + '" loading="lazy" data-save="' + escapeHtml(src) + '"' + comfy + '>' +
-          '<span class="agent-img-tag">' + escapeHtml(alt) + '</span>' +
-          '<button class="img-save-btn">保存到相册</button></span>';
+        if (/\.(png|jpe?g|gif|webp)(\?|#|$)/i.test(src)) {
+          const comfy = String(src).indexOf('/uploads/comfy-') === 0 ? ' data-comfy="1"' : '';
+          html += '<span class="agent-img"><img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt) + '" loading="lazy" data-save="' + escapeHtml(src) + '"' + comfy + '>' +
+            '<span class="agent-img-tag">' + escapeHtml(alt) + '</span>' +
+            '<button class="img-save-btn">保存到相册</button></span>';
+        } else {
+          const fname = (alt === '图片' ? (src.split('/').pop() || '文件') : alt);
+          html += '<span class="agent-file"><span class="agent-file-ico">📄</span><span class="agent-file-name">' + escapeHtml(fname) + '</span>' +
+            '<button class="agent-file-btn" data-url="' + escapeHtml(src) + '" data-name="' + escapeHtml(fname) + '">下载</button></span>';
+        }
       }
     }
     return html;
@@ -976,6 +982,39 @@
     } catch (e) {
       showToast('保存失败: ' + (e && e.message), true);
       return false;
+    }
+  }
+
+  // 下载 AI 生成/修改的文件：手机走原生保存到 App 下载目录，电脑网页走 <a download>
+  function downloadAgentFile(url, name) {
+    if (!url) return;
+    if (relayCfg) {
+      showToast('中继模式暂不支持下载文件，请改用局域网模式', true);
+      return;
+    }
+    let abs = url;
+    if (abs.indexOf('/') === 0 && abs.indexOf('//') !== 0 && !/^data:/.test(abs)) {
+      try { abs = location.origin + abs; } catch (_) {}
+    }
+    try {
+      if (window.AndroidBridge && window.AndroidBridge.saveFileToPhone) {
+        const r = window.AndroidBridge.saveFileToPhone(abs, name || 'file');
+        if (r === 'ok') {
+          showToast('已下载到手机');
+          return;
+        }
+        showToast('下载失败: ' + (r || '未知错误'), true);
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = abs;
+      a.download = name || 'file';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      showToast('已开始下载');
+    } catch (e) {
+      showToast('下载失败: ' + (e && e.message), true);
     }
   }
 
@@ -1142,6 +1181,13 @@
 
   // 图片区事件：保存按钮 / 生成图缓存到 App / 中继取图失败换 dataURL 或本地缓存
   messagesEl.addEventListener('click', (e) => {
+    const fbtn = e.target && e.target.closest ? e.target.closest('.agent-file-btn') : null;
+    if (fbtn) {
+      const url = fbtn.getAttribute('data-url') || '';
+      const name = fbtn.getAttribute('data-name') || '文件';
+      downloadAgentFile(url, name);
+      return;
+    }
     const btn = e.target && e.target.closest ? e.target.closest('.img-save-btn') : null;
     if (btn) {
       const img = btn.parentNode && btn.parentNode.querySelector('img');

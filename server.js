@@ -18,6 +18,22 @@ const TTS_DIR = path.join(UPLOAD_DIR, 'tts');
 const TEXT_FILE_EXTS = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties']);
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_FILE_TEXT_CHARS = 200 * 1024;
+const PUB_FILE_EXTS = new Set(['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.pdf', '.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.zip', '.apk']);
+const MAX_PUB_FILE_BYTES = 20 * 1024 * 1024;
+const UPLOAD_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.markdown': 'text/markdown; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.tsv': 'text/tab-separated-values; charset=utf-8',
+  '.log': 'text/plain; charset=utf-8', '.xml': 'application/xml; charset=utf-8', '.yaml': 'application/yaml; charset=utf-8', '.yml': 'application/yaml; charset=utf-8',
+  '.zip': 'application/zip', '.apk': 'application/vnd.android.package-archive'
+};
 const PHONE_THREADS_PATH = path.join(ROOT, 'phone-threads.json');
 const PHONE_CAPS_PATH = path.join(ROOT, 'phone-caps.json');
 
@@ -134,7 +150,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.29';
+const VERSION = '10.30';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1684,7 +1700,7 @@ async function apiDispatch(method, params, clientId) {
       registerPhoneThread(threadId, clientId);
       const input = [];
       const userText = body.text ? String(body.text) : '';
-      const promptText = userText + (userText ? '\n\n[系统要求：请始终使用简体中文回复用户。]' : '');
+      const promptText = userText + (userText ? '\n\n[系统要求：请始终使用简体中文回复用户。生成或修改 Word/PPT/PDF/Excel 等文件后，必须调用 publish_file 工具把文件发布为下载链接，并在回复末尾用文件下载语法展示：📄 [文件名](链接)。]' : '');
       if (promptText) input.push({ type: 'text', text: promptText });
       for (const img of (body.images || [])) {
         const file = saveUpload(img.data, img.name);
@@ -1863,6 +1879,30 @@ async function apiDispatch(method, params, clientId) {
       if (!f) throw new BusinessError('无效的图片路径');
       try { fs.unlinkSync(f); } catch (_) {}
       return { ok: true };
+    }
+    case 'filePublish': {
+      const p = String((params && params.path) || '').trim();
+      if (!p) throw new BusinessError('缺少文件路径');
+      const ws = path.resolve(config.workspace || ROOT);
+      let file = path.isAbsolute(p) ? p : path.join(ws, p);
+      file = path.normalize(file);
+      const inWs = file.startsWith(ws + path.sep) || file === ws;
+      const inUploads = file.startsWith(UPLOAD_DIR + path.sep) || file === UPLOAD_DIR;
+      if (!inWs && !inUploads) {
+        throw new BusinessError('仅支持发布工作目录或 uploads 内的文件');
+      }
+      if (!fs.existsSync(file)) throw new BusinessError('文件不存在: ' + p);
+      const st = fs.statSync(file);
+      if (!st.isFile()) throw new BusinessError('不是文件: ' + p);
+      if (st.size > MAX_PUB_FILE_BYTES) throw new BusinessError('文件过大：发布上限 20MB');
+      const ext = path.extname(file).toLowerCase();
+      if (!PUB_FILE_EXTS.has(ext)) throw new BusinessError('不支持发布的文件类型：' + (ext || '无扩展名') + '（支持 docx/pptx/xlsx/pdf/txt/md/json/csv/zip/apk）');
+      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+      const id = crypto.randomBytes(8).toString('hex');
+      const out = path.join(UPLOAD_DIR, 'pub-' + id + ext);
+      fs.copyFileSync(file, out);
+      const name = path.basename(file);
+      return { ok: true, url: '/uploads/pub-' + id + ext, name, size: st.size };
     }
     default:
       throw new Error('未知方法: ' + method);
@@ -2228,6 +2268,11 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, await apiDispatch('deleteComfyImage', body));
       return;
     }
+    if (p === '/api/file/publish' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
+      sendJson(res, 200, await apiDispatch('filePublish', body));
+      return;
+    }
     sendJson(res, 404, { error: 'Not found' });
   } catch (e) {
     if (e instanceof BusinessError) {
@@ -2292,8 +2337,14 @@ const server = http.createServer((req, res) => {
       return;
     }
     const ext = path.extname(name).toLowerCase();
-    const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : (ext === '.webp' ? 'image/webp' : (ext === '.gif' ? 'image/gif' : 'image/png'));
-    res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'no-cache' });
+    const mime = UPLOAD_MIME[ext] || 'application/octet-stream';
+    const headers = { 'Content-Type': mime, 'Cache-Control': 'no-cache' };
+    if (!mime.startsWith('image/')) {
+      const safeName = String(name).replace(/["\\\r\n]/g, '_');
+      const ascii = safeName.replace(/[^\x20-\x7e]/g, '_');
+      headers['Content-Disposition'] = "attachment; filename=\"" + ascii + "\"; filename*=UTF-8''" + encodeURIComponent(safeName);
+    }
+    res.writeHead(200, headers);
     fs.createReadStream(file).pipe(res);
     return;
   }

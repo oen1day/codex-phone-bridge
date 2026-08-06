@@ -500,6 +500,38 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.agent-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--surface-deep);
+  border: 1px solid rgba(0, 210, 160, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.agent-file-ico { flex-shrink: 0; }
+.agent-file-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+.agent-file-btn {
+  flex-shrink: 0;
+  border: none;
+  background: var(--primary);
+  color: #fff;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.agent-file-btn:active { opacity: 0.8; }
 .img-save-btn {
   display: block;
   margin-top: 4px;

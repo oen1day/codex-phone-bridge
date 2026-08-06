@@ -81,6 +81,17 @@ const TOOLS = [
     }
   },
   {
+    name: 'publish_file',
+    description: '把电脑端生成或修改的文档/文件复制到手机可下载的 uploads 目录，返回下载链接。生成或修改 Word/PPT/PDF/Excel/txt/md 等文件后必须调用本工具，然后在回复中用文件下载语法展示成品：📄 [文件名](返回的url)。参数 path 为文件在电脑上的绝对路径（或相对于工作目录的路径）。仅支持 docx/pptx/xlsx/pdf/txt/md/json/csv/zip/apk 等常见类型，单文件不超过 20MB。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '要发布的文件路径（绝对路径或相对工作目录路径）' }
+      },
+      required: ['path']
+    }
+  },
+  {
     name: 'list_phone_apps',
     description: '列出手机（鳍点AI App）上已安装的常用应用，返回名称和包名。这是读取手机应用列表的推荐方式：手机通过无线中继连接，不需要 USB 数据线、不需要 adb、不需要 USB 调试。直接调用本工具即可；不要检查 USB 设备或运行 adb 命令。需要电脑端桥接窗口正在运行、手机 App 已连接中继。',
     inputSchema: { type: 'object', properties: {} }
@@ -174,7 +185,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '10.29' }
+        serverInfo: { name: 'codex-phone-bridge', version: '10.30' }
       }
     });
     return;
@@ -227,6 +238,9 @@ async function handle(msg) {
           width: args.width,
           height: args.height
         });
+      } else if (name === 'publish_file') {
+        if (!args.path) throw new Error('缺少 path 参数');
+        result = await api('/api/file/publish', { path: args.path });
       } else {
         throw new Error('未知工具: ' + name);
       }
