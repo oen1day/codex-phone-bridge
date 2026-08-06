@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.41';
+  const APP_VERSION = '10.42';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -1036,7 +1036,9 @@
     if (!url) return;
     const s = getDownloadedFiles();
     s.add(url);
-    try { localStorage.setItem('downloadedFiles', JSON.stringify(Array.from(s))); } catch (_) {}
+    const arr = Array.from(s);
+    while (arr.length > 10) arr.shift(); // 已下载标记也按 10 条清理，防止无限增长
+    try { localStorage.setItem('downloadedFiles', JSON.stringify(arr)); } catch (_) {}
   }
   function setFileBtnOpen(url) {
     document.querySelectorAll('.agent-file-btn').forEach(b => {

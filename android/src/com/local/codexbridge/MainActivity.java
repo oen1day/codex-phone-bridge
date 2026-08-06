@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.41";
+    private static final String APP_VERSION = "10.42";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -95,6 +95,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        pruneDownloadsCache(); // 清理历史残留的下载缓存（最多 10 个）
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -112,6 +113,22 @@ public class MainActivity extends Activity {
         } else {
             setupUi();
         }
+    }
+
+    // 下载缓存上限：filesDir/downloads 最多保留 10 个，超出删最旧
+    private void pruneDownloadsCache() {
+        try {
+            File dir = new File(getFilesDir(), "downloads");
+            if (!dir.exists()) return;
+            File[] files = dir.listFiles();
+            if (files == null || files.length <= 10) return;
+            java.util.Arrays.sort(files, new java.util.Comparator<java.io.File>() {
+                @Override public int compare(java.io.File a, java.io.File b) {
+                    return Long.compare(a.lastModified(), b.lastModified());
+                }
+            });
+            for (int i = 0; i < files.length - 10; i++) files[i].delete();
+        } catch (Exception e) {}
     }
 
     private void startKeepAlive() {
@@ -422,6 +439,7 @@ public class MainActivity extends Activity {
                 java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
                 fos.write(data);
                 fos.close();
+                pruneDownloadsCache(); // 超出 10 个删最旧
                 String publicPath;
                 if (Build.VERSION.SDK_INT >= 29) {
                     ContentValues cv = new ContentValues();
@@ -475,7 +493,7 @@ public class MainActivity extends Activity {
                 File f = new File(dir, safe);
                 if (!f.exists()) {
                     String r = saveFileToPhone(url, safe);
-                    if (!"ok".equals(r)) return r;
+                    if (!"ok".equals(r)) return "文件已被清理或已过期，请重新下载";
                 }
                 final String mime = mimeFor(safe);
                 final android.net.Uri uri = android.net.Uri.parse("content://" + LocalFileProvider.AUTHORITY + "/" + safe);

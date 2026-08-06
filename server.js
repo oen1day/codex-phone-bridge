@@ -153,7 +153,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.41';
+const VERSION = '10.42';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1645,6 +1645,22 @@ function cleanupComfyImages() {
 cleanupComfyImages();
 setInterval(cleanupComfyImages, 60 * 60 * 1000);
 
+// 发布文件数量上限：uploads/pub-* 最多保留 max 个，超出按修改时间删最旧（不影响 comfy-*/upload-*/工作区）
+function prunePubFiles(max) {
+  const limit = Math.max(1, Number(max) || 10);
+  try {
+    if (!fs.existsSync(UPLOAD_DIR)) return;
+    const files = fs.readdirSync(UPLOAD_DIR)
+      .filter(n => n.startsWith('pub-'))
+      .map(n => ({ n, t: fs.statSync(path.join(UPLOAD_DIR, n)).mtimeMs }))
+      .sort((a, b) => a.t - b.t);
+    for (let i = 0; i < files.length - limit; i++) {
+      try { fs.unlinkSync(path.join(UPLOAD_DIR, files[i].n)); } catch (_) {}
+    }
+  } catch (_) {}
+}
+prunePubFiles(10);
+
 async function apiDispatch(method, params, clientId) {
   const c = await getClient();
   switch (method) {
@@ -1940,6 +1956,7 @@ async function apiDispatch(method, params, clientId) {
       const out = path.join(UPLOAD_DIR, 'pub-' + id + ext);
       fs.copyFileSync(file, out);
       const name = path.basename(file);
+      prunePubFiles(10);
       return { ok: true, url: '/uploads/pub-' + id + ext, name, size: st.size };
     }
     case 'fileData': {

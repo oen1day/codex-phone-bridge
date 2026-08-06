@@ -188,6 +188,10 @@ check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = cur
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));
 check('style 确认弹窗样式', css.includes('.confirm-dialog') && css.includes('.confirm-box'));
 check('授权弹窗内容可滚动按钮固定', app.includes('class="a-body"') && css.includes('.approval-card .a-body') && css.includes('overflow-y: auto') && css.includes('max-height: 82vh') && css.includes('flex: 0 0 auto'));
+check('server 发布文件数量上限', server.includes('function prunePubFiles(') && server.includes('prunePubFiles(10)') && server.includes("n.startsWith('pub-')"));
+check('Java 下载缓存清理', java.includes('pruneDownloadsCache') && java.includes('files.length - 10'));
+check('Java 过期文件友好提示', java.includes('文件已被清理或已过期，请重新下载'));
+check('app 下载标记按 10 条清理', app.includes('while (arr.length > 10) arr.shift()'));
 check('app 朗读超时按长度自适应', app.includes('function ttsTimeoutFor(') && app.includes('n * 1500 + 15000') && app.includes('Math.min(120000'));
 check('app 流式用自适应超时', app.includes('ttsTimeoutFor(streamText, 30000)'));
 check('app 长文本走分段合成', app.includes('clean.length > 30') && app.includes('playMessageSegments(convId, msgId, text, auto, temp)'));
