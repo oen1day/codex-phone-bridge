@@ -33,6 +33,7 @@ check('server 无图纯文生图（删 LoadImage）', server.includes("delete gr
 check('server 进度广播 comfyProgress', server.includes("method: 'comfyProgress'"));
 check('server 广播 comfyStarted', server.includes("method: 'comfyStarted'"));
 check('server 支持 comfyApiKey 透传', server.includes('extraData.api_key_comfy_org = config.comfyApiKey') && server.includes('extra_data: extraData'));
+check('server 支持 Firebase 令牌自动续期', server.includes('function getComfyAuthToken()') && server.includes('securetoken.googleapis.com') && server.includes('comfyFirebaseRefreshToken'));
 check('server 未启动可读提示', server.includes('请先在电脑上启动 ComfyUI'));
 check('server 有 HTTP 端点', server.includes("'/api/comfy/generate'"));
 check('app.js 处理 comfyProgress', app.includes("method === 'comfyProgress'") && app.includes('updateComfyProgress'));
@@ -46,6 +47,7 @@ check('server 默认 gptimage2', server.includes("params.workflow || 'gptimage2'
 check('MainActivity 有图像生成开关', java.includes('KEY_CAP_IMAGE_GEN') && java.includes('图像生成（ComfyUI'));
 check('config.example 有 comfyUrl', cfg.includes('comfyUrl'));
 check('config.example 有 comfyApiKey', cfg.includes('comfyApiKey'));
+check('config.example 有 comfyFirebaseRefreshToken', cfg.includes('comfyFirebaseRefreshToken'));
 const css = read('public/style.css');
 check('style.css 有占位卡片样式', css.includes('.comfy-generating') && css.includes('.comfy-placeholder') && css.includes('.comfy-badge') && css.includes('comfy-breathe'));
 

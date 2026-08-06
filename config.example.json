@@ -23,5 +23,6 @@
   "comfyWorkflows": "",
   "comfyInputDir": "",
   "comfyApiKey": "",
-  "comfyAuthToken": ""
+  "comfyAuthToken": "",
+  "comfyFirebaseRefreshToken": ""
 }

@@ -108,7 +108,8 @@ function loadConfig() {
     comfyWorkflows: '',
     comfyInputDir: '',
     comfyApiKey: '',
-    comfyAuthToken: ''
+    comfyAuthToken: '',
+    comfyFirebaseRefreshToken: ''
   }, cfg);
   if (!merged.workspace) merged.workspace = docs;
   if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
@@ -118,6 +119,7 @@ function loadConfig() {
   if (!merged.comfyInputDir) merged.comfyInputDir = '';
   if (!merged.comfyApiKey) merged.comfyApiKey = '';
   if (!merged.comfyAuthToken) merged.comfyAuthToken = '';
+  if (!merged.comfyFirebaseRefreshToken) merged.comfyFirebaseRefreshToken = '';
   return merged;
 }
 
@@ -1160,6 +1162,29 @@ const COMFY_WORKFLOWS = {
   gptimage2: 'gptimage2_api.json'
 };
 
+const COMFY_FIREBASE_API_KEY = 'AIzaSyC2-fomLqgCjb7ELwta1I9cEarPK8ziTGs';
+let comfyIdTokenCache = { token: null, expiresAt: 0 };
+
+// Comfy Org 谷歌登录用的是 Firebase ID Token（约 1 小时有效）；
+// 有 refreshToken 时桥接自动续期，用户只需复制一次。
+async function getComfyAuthToken() {
+  if (config.comfyAuthToken) return config.comfyAuthToken;
+  if (!config.comfyFirebaseRefreshToken) return null;
+  if (comfyIdTokenCache.token && Date.now() < comfyIdTokenCache.expiresAt - 5 * 60 * 1000) {
+    return comfyIdTokenCache.token;
+  }
+  const r = await fetch('https://securetoken.googleapis.com/v1/token?key=' + COMFY_FIREBASE_API_KEY, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: config.comfyFirebaseRefreshToken })
+  });
+  if (!r.ok) throw new BusinessError('Comfy 登录令牌刷新失败（请重新复制 firebase 刷新令牌到 config.json）');
+  const data = await r.json();
+  if (!data.id_token) throw new BusinessError('Comfy 登录令牌刷新失败：未返回 id_token');
+  comfyIdTokenCache = { token: data.id_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
+  return data.id_token;
+}
+
 function findComfyInputDir() {
   if (config.comfyInputDir && fs.existsSync(config.comfyInputDir)) return config.comfyInputDir;
   const home = process.env.USERPROFILE || '';
@@ -1233,7 +1258,8 @@ async function comfyGenerate(params) {
   const clientId = crypto.randomBytes(8).toString('hex');
   let promptId = null;
   const extraData = {};
-  if (config.comfyAuthToken) extraData.auth_token_comfy_org = config.comfyAuthToken;
+  const comfyToken = await getComfyAuthToken();
+  if (comfyToken) extraData.auth_token_comfy_org = comfyToken;
   if (config.comfyApiKey) extraData.api_key_comfy_org = config.comfyApiKey;
   try {
     const r = await fetch(config.comfyUrl + '/prompt', {
