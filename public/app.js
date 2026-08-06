@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.16';
+  const APP_VERSION = '10.17';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -1003,6 +1003,103 @@
     });
   }
 
+  // 内置全屏图片查看器：双指缩放、拖动、单击关闭（不跳系统查看器）
+  let viewerOverlay = null;
+  let viewerScale = 1, viewerTx = 0, viewerTy = 0, viewerMoved = false;
+  let viewerTouches = new Map();
+  let viewerPrev = new Map();
+  let viewerLastPinch = 0;
+
+  function applyViewerTransform() {
+    if (!viewerOverlay) return;
+    const img = viewerOverlay.querySelector('.viewer-img');
+    img.style.transform = 'scale(' + viewerScale + ') translate(' + viewerTx + 'px,' + viewerTy + 'px)';
+  }
+
+  function resetViewerTransform() {
+    viewerScale = 1; viewerTx = 0; viewerTy = 0;
+    applyViewerTransform();
+  }
+
+  function openImageViewerOverlay(src) {
+    if (!viewerOverlay) {
+      viewerOverlay = document.createElement('div');
+      viewerOverlay.className = 'viewer-overlay hidden';
+      viewerOverlay.innerHTML = '<img class="viewer-img" alt="">';
+      document.body.appendChild(viewerOverlay);
+      viewerOverlay.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        viewerMoved = false;
+        viewerTouches = new Map();
+        viewerPrev = new Map();
+        viewerLastPinch = 0;
+        for (const t of e.changedTouches) {
+          viewerTouches.set(t.identifier, { x: t.clientX, y: t.clientY });
+          viewerPrev.set(t.identifier, { x: t.clientX, y: t.clientY });
+        }
+        if (viewerTouches.size === 2) {
+          const [a, b] = [...viewerTouches.values()];
+          viewerLastPinch = Math.hypot(a.x - b.x, a.y - b.y);
+        }
+      }, { passive: false });
+      viewerOverlay.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        const cur = new Map();
+        for (const t of e.changedTouches) cur.set(t.identifier, { x: t.clientX, y: t.clientY });
+        for (const [id, p] of cur) viewerTouches.set(id, p);
+        if (viewerTouches.size >= 2) {
+          viewerMoved = true;
+          const [a, b] = [...viewerTouches.values()];
+          const dist = Math.hypot(a.x - b.x, a.y - b.y);
+          if (viewerLastPinch > 0) {
+            viewerScale = Math.max(1, Math.min(6, viewerScale * (dist / viewerLastPinch)));
+          }
+          viewerLastPinch = dist;
+          const ids = [...viewerTouches.keys()];
+          const pa = viewerPrev.get(ids[0]);
+          const pb = viewerPrev.get(ids[1]);
+          if (pa && pb) {
+            viewerTx += ((a.x + b.x) - (pa.x + pb.x)) / 2;
+            viewerTy += ((a.y + b.y) - (pa.y + pb.y)) / 2;
+          }
+        } else if (viewerTouches.size === 1) {
+          const id = [...viewerTouches.keys()][0];
+          const p = viewerTouches.get(id);
+          const prev = viewerPrev.get(id);
+          if (prev) {
+            viewerTx += p.x - prev.x;
+            viewerTy += p.y - prev.y;
+            if (Math.abs(p.x - prev.x) + Math.abs(p.y - prev.y) > 2) viewerMoved = true;
+          }
+        }
+        viewerPrev = new Map(cur);
+        applyViewerTransform();
+      }, { passive: false });
+      const endViewer = (e) => {
+        if (e.touches.length === 0) {
+          if (!viewerMoved) closeViewerOverlay();
+          viewerTouches = new Map();
+          viewerLastPinch = 0;
+        } else {
+          viewerTouches = new Map();
+          for (const t of e.touches) viewerTouches.set(t.identifier, { x: t.clientX, y: t.clientY });
+          viewerPrev = new Map(viewerTouches);
+          if (viewerTouches.size < 2) viewerLastPinch = 0;
+        }
+      };
+      viewerOverlay.addEventListener('touchend', endViewer, { passive: false });
+      viewerOverlay.addEventListener('touchcancel', endViewer, { passive: false });
+    }
+    const img = viewerOverlay.querySelector('.viewer-img');
+    img.src = src;
+    viewerOverlay.classList.remove('hidden');
+    resetViewerTransform();
+  }
+
+  function closeViewerOverlay() {
+    if (viewerOverlay) viewerOverlay.classList.add('hidden');
+  }
+
   // 图片区事件：保存按钮 / 生成图缓存到 App / 中继取图失败换 dataURL 或本地缓存
   messagesEl.addEventListener('click', (e) => {
     const btn = e.target && e.target.closest ? e.target.closest('.img-save-btn') : null;
@@ -1019,8 +1116,11 @@
         try { url = location.origin + url; } catch (_) {}
       }
       try {
-        if (window.AndroidBridge && window.AndroidBridge.openImageViewer) {
-          window.AndroidBridge.openImageViewer(url);
+        if (window.AndroidBridge && ('ontouchstart' in window)) {
+          // 手机端：内置全屏查看器（双指缩放），不再跳系统
+          openImageViewerOverlay(url);
+        } else if (window.AndroidBridge && window.AndroidBridge.openImageViewer) {
+          window.AndroidBridge.openImageViewer(url); // 后备
         } else {
           window.open(url, '_blank');
         }

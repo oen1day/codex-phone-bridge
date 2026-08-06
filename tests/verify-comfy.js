@@ -73,10 +73,11 @@ check('Java 有保存到相册方法', java.includes('saveImageToGallery') && ja
 check('Java 有 App 内缓存方法', java.includes('cacheImageToApp') && java.includes('files.length > 10'));
 check('Manifest 有低版本存储权限', read('android/AndroidManifest.xml').includes('WRITE_EXTERNAL_STORAGE'));
 const css = read('public/style.css');
-check('占位卡有固有宽高比', app.includes('width="320" height="200"') && css.includes('aspect-ratio: 320 / 200'));
+check('占位卡固定高度 180px', app.includes('width="320" height="200"') && css.includes('height: 180px'));
 check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - comfyStartTs)'));
 check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
-check('app 点击图片全屏预览', app.includes('openImageViewer') && app.includes("tagName === 'IMG'"));
+check('app 内置全屏查看器', app.includes('openImageViewerOverlay') && app.includes('viewerScale') && app.includes("('ontouchstart' in window)"));
+check('style 有查看器遮罩', css.includes('.viewer-overlay') && css.includes('touch-action: none'));
 check('app comfy 事件诊断日志', app.includes("console.log('[event] ' + method)") || app.includes('/^comfy/.test(method)'));
 check('事件日志只显示 comfy', app.includes("String(name || '').indexOf('comfy') !== 0"));
 check('卡片双保险：工具调用即显示', app.includes('/generate_image/i.test'));
