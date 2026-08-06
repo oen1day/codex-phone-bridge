@@ -27,5 +27,8 @@
   "comfyFirebaseRefreshToken": "",
   "openaiApiKey": "",
   "imageProvider": "comfy",
-  "httpsProxy": ""
+  "httpsProxy": "",
+  "autoCleanThreads": true,
+  "threadRetentionDays": 30,
+  "threadRetentionCount": 100
 }

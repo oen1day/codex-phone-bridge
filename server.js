@@ -135,7 +135,10 @@ function loadConfig() {
     comfyFirebaseRefreshToken: '',
     openaiApiKey: '',
     imageProvider: 'comfy',
-    httpsProxy: ''
+    httpsProxy: '',
+    autoCleanThreads: true,
+    threadRetentionDays: 30,
+    threadRetentionCount: 100
   }, cfg);
   if (!merged.workspace) merged.workspace = docs;
   if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
@@ -153,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.42';
+const VERSION = '10.43';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1661,6 +1664,44 @@ function prunePubFiles(max) {
 }
 prunePubFiles(10);
 
+// 自动会话清理：保留最近 N 天或最近 M 个（取更宽松），最近 10 个永久保护；超出的调 thread/delete 正规删除
+async function pruneOldThreads() {
+  if (!config.autoCleanThreads) return;
+  const days = Math.max(1, Number(config.threadRetentionDays) || 30);
+  const count = Math.max(1, Number(config.threadRetentionCount) || 100);
+  try {
+    const c = await getClient();
+    const data = await c.call('thread/list', { limit: 1000, sortKey: 'updated_at', archived: false });
+    let list = Array.isArray(data) ? data : (data.data || data.threads || []);
+    if (!Array.isArray(list)) list = [];
+    list.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+    const now = Date.now();
+    const cutoff = now - days * 24 * 60 * 60 * 1000;
+    const protect = new Set(list.slice(0, 10).map(t => t && t.id).filter(Boolean));
+    const doomed = [];
+    list.forEach((t, idx) => {
+      if (!t || !t.id || protect.has(t.id)) return;
+      const st = t.status ? (t.status.type || t.status) : 'notLoaded';
+      if (st && st !== 'idle' && st !== 'notLoaded') return; // 进行中/活跃会话不删
+      const ts = new Date(t.updated_at || 0).getTime() || 0;
+      if (ts >= cutoff || idx < count) return;
+      doomed.push(t);
+    });
+    for (const t of doomed) {
+      try { await c.call('thread/delete', { threadId: t.id }); } catch (_) {}
+      if (phoneThreads[t.id]) {
+        delete phoneThreads[t.id];
+        savePhoneThreads();
+      }
+      console.log('[clean] 已清理旧会话: ' + t.id + ' ' + (t.name || ''));
+    }
+    if (doomed.length) console.log('[clean] 自动会话清理完成，共删除 ' + doomed.length + ' 个');
+  } catch (e) {
+    console.error('[clean] 自动会话清理失败: ' + (e && e.message));
+  }
+}
+setInterval(pruneOldThreads, 24 * 60 * 60 * 1000); // 每天一次
+
 async function apiDispatch(method, params, clientId) {
   const c = await getClient();
   switch (method) {
@@ -1677,7 +1718,7 @@ async function apiDispatch(method, params, clientId) {
       };
     case 'threads':
       {
-        const data = await c.call('thread/list', { limit: 200, sortKey: 'updated_at', archived: false });
+        const data = await c.call('thread/list', { limit: Math.max(200, Number(config.threadRetentionCount) || 100), sortKey: 'updated_at', archived: false });
         const arr = Array.isArray(data) ? data : (data.data || data.threads || []);
         seedPhoneThreads(arr);
         return {
@@ -2484,6 +2525,7 @@ server.listen(config.port, '0.0.0.0', () => {
   }
   getClient().then(() => {
     console.log('Codex 内核连接检查: 正常');
+    pruneOldThreads(); // 启动时执行一次自动会话清理
   }).catch(e => {
     console.error('Codex 内核连接失败: ' + (e && e.message));
   });

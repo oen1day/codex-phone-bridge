@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.42';
+  const APP_VERSION = '10.43';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -648,6 +648,7 @@
         setStatus('已连接');
       }
       renderThreads();
+      clearConvLocalData(threadId);
     } catch (e) {
       showToast('删除失败: ' + e.message, true);
     }
@@ -1037,7 +1038,7 @@
     const s = getDownloadedFiles();
     s.add(url);
     const arr = Array.from(s);
-    while (arr.length > 10) arr.shift(); // 已下载标记也按 10 条清理，防止无限增长
+    while (arr.length > 200) arr.shift(); // 已下载标记最多 200 条，防止无限增长
     try { localStorage.setItem('downloadedFiles', JSON.stringify(arr)); } catch (_) {}
   }
   function setFileBtnOpen(url) {
@@ -1123,7 +1124,11 @@
     try { return JSON.parse(localStorage.getItem('comfyImgCache') || '{}') || {}; } catch (_) { return {}; }
   }
   function saveComfyImgCache(map) {
-    try { localStorage.setItem('comfyImgCache', JSON.stringify(map)); } catch (_) {}
+    try {
+      const entries = Object.entries(map || {});
+      while (entries.length > 100) entries.shift(); // 图片映射最多 100 条，删最旧
+      localStorage.setItem('comfyImgCache', JSON.stringify(Object.fromEntries(entries)));
+    } catch (_) {}
   }
 
   // 生成图渲染成功后下载到 App 私有缓存（最多 10 张），并通知电脑删除 uploads 副本
@@ -2656,6 +2661,21 @@
     const meta = getTtsMeta();
     const remove = [];
     for (const id of Object.keys(meta)) if (meta[id].temp) remove.push(id);
+    for (const id of remove) {
+      const r = meta[id];
+      delete meta[id];
+      ttsDeleteMessage(id, r && r.segs);
+    }
+    setTtsMeta(meta);
+  }
+
+  // 删除对话后清理本地残留：该会话的语音记录（下载标记/图片映射按 URL 全局共用，无法按会话归属，不清理）
+  function clearConvLocalData(convId) {
+    const meta = getTtsMeta();
+    const remove = [];
+    for (const id of Object.keys(meta)) {
+      if (String(meta[id].convId) === String(convId)) remove.push(id);
+    }
     for (const id of remove) {
       const r = meta[id];
       delete meta[id];

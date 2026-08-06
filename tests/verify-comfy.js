@@ -191,7 +191,13 @@ check('授权弹窗内容可滚动按钮固定', app.includes('class="a-body"') 
 check('server 发布文件数量上限', server.includes('function prunePubFiles(') && server.includes('prunePubFiles(10)') && server.includes("n.startsWith('pub-')"));
 check('Java 下载缓存清理', java.includes('pruneDownloadsCache') && java.includes('files.length - 10'));
 check('Java 过期文件友好提示', java.includes('文件已被清理或已过期，请重新下载'));
-check('app 下载标记按 10 条清理', app.includes('while (arr.length > 10) arr.shift()'));
+check('app 下载标记按 200 条清理', app.includes('while (arr.length > 200) arr.shift()'));
+check('app 图片映射按 100 条清理', app.includes('entries.length > 100') && app.includes('Object.fromEntries'));
+check('app 删除对话清理本地语音记录', app.includes('function clearConvLocalData(') && app.includes('clearConvLocalData(threadId)'));
+check('server 自动会话清理', server.includes('function pruneOldThreads(') && server.includes('autoCleanThreads') && server.includes('threadRetentionDays') && server.includes('threadRetentionCount') && server.includes('24 * 60 * 60 * 1000'));
+check('server 清理保留规则', server.includes('保护') && server.includes('slice(0, 10)') && server.includes("c.call('thread/delete', { threadId: t.id })"));
+check('server 列表 limit 覆盖保留数量', server.includes('Math.max(200, Number(config.threadRetentionCount)'));
+check('config.example 有会话保留配置', read('config.example.json').includes('autoCleanThreads') && read('config.example.json').includes('threadRetentionDays') && read('config.example.json').includes('threadRetentionCount'));
 check('app 朗读超时按长度自适应', app.includes('function ttsTimeoutFor(') && app.includes('n * 1500 + 15000') && app.includes('Math.min(120000'));
 check('app 流式用自适应超时', app.includes('ttsTimeoutFor(streamText, 30000)'));
 check('app 长文本走分段合成', app.includes('clean.length > 30') && app.includes('playMessageSegments(convId, msgId, text, auto, temp)'));
