@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.31';
+  const APP_VERSION = '10.32';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -968,7 +968,8 @@
           showToast('已保存到相册');
           return true;
         }
-        showToast('保存失败: ' + (r || '未知错误'), true);
+        const msg = r || '未知错误';
+        showToast(String(msg).indexOf('保存失败:') === 0 ? msg : '保存失败: ' + msg, true);
         return false;
       }
       const a = document.createElement('a');
@@ -1003,7 +1004,8 @@
           showToast('已下载到手机');
           return;
         }
-        showToast('下载失败: ' + (r || '未知错误'), true);
+        const msg = r || '未知错误';
+        showToast(String(msg).indexOf('下载失败:') === 0 ? msg : '下载失败: ' + msg, true);
         return;
       }
       const a = document.createElement('a');
@@ -1057,7 +1059,8 @@
       a.remove();
       showToast('已开始下载');
     } catch (e) {
-      showToast('下载失败: ' + ((e && e.message) || '未知错误'), true);
+      const msg = ((e && e.message) || '未知错误');
+      showToast(String(msg).indexOf('下载失败:') === 0 ? msg : '下载失败: ' + msg, true);
     }
   }
 

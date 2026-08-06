@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.31";
+    private static final String APP_VERSION = "10.32";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -267,6 +267,9 @@ public class MainActivity extends Activity {
                     c.setConnectTimeout(10000);
                     c.setReadTimeout(30000);
                     c.setRequestProperty("User-Agent", "codex-phone-bridge");
+                    android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                    String cookie = cm.getCookie(url);
+                    if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
                     java.io.InputStream in = c.getInputStream();
                     java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                     byte[] buf = new byte[8192];
@@ -321,6 +324,9 @@ public class MainActivity extends Activity {
                     c.setConnectTimeout(10000);
                     c.setReadTimeout(30000);
                     c.setRequestProperty("User-Agent", "codex-phone-bridge");
+                    android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                    String cookie = cm.getCookie(url);
+                    if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
                     java.io.InputStream in = c.getInputStream();
                     java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                     byte[] buf = new byte[8192];
@@ -370,6 +376,14 @@ public class MainActivity extends Activity {
                     c.setConnectTimeout(10000);
                     c.setReadTimeout(60000);
                     c.setRequestProperty("User-Agent", "codex-phone-bridge");
+                    android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                    String cookie = cm.getCookie(url);
+                    if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
+                    int code = c.getResponseCode();
+                    if (code != 200) {
+                        c.disconnect();
+                        return "HTTP " + code + (code == 401 ? " 未授权（请重新登录电脑端）" : " 下载失败");
+                    }
                     java.io.InputStream in = c.getInputStream();
                     java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                     byte[] buf = new byte[8192];
@@ -406,7 +420,7 @@ public class MainActivity extends Activity {
                 });
                 return "ok";
             } catch (Exception e) {
-                return "下载失败: " + (e.getMessage() == null ? e.toString() : e.getMessage());
+                return e.getMessage() == null ? e.toString() : e.getMessage();
             }
         }
 

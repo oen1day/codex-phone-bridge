@@ -153,6 +153,8 @@ check('app 中继失败明确报错', app.includes("分片 ' + (idx + 1) + ' 获
 check('app 调用原生保存文件', app.includes('saveFileToPhone'));
 check('style 有文件下载卡片', css.includes('.agent-file') && css.includes('.agent-file-btn'));
 check('Java 有保存文件方法', java.includes('saveFileToPhone') && java.includes('getFilesDir(), "downloads"'));
+check('Java 下载带登录 Cookie', java.includes('CookieManager.getInstance()') && java.includes('c.setRequestProperty("Cookie", cookie)') && java.includes('未授权（请重新登录电脑端）'));
+check('前端去重错误前缀', app.includes("indexOf('下载失败:') === 0") && app.includes("indexOf('保存失败:') === 0"));
 check('AI 行为规范要求发布文件', server.includes('publish_file 工具') && server.includes('📄 [文件名](链接)'));
 check('server 有中继文件分片接口', server.includes("case 'fileData':") && server.includes('function safePubPath(') && server.includes('FILE_DATA_CHUNK'));
 check('server 分片只允许 pub-*', server.includes('pub-[A-Za-z0-9._-]+') && server.includes('仅支持 /uploads/pub-*'));
