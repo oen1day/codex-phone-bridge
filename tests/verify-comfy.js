@@ -80,6 +80,7 @@ check('图片描述标签替代感叹号', app.includes('agent-img-tag') && app.
 check('style 有图片描述标签', css.includes('.agent-img-tag'));
 check('查看器返回键接管', app.includes('history.pushState({ viewer: true }') && app.includes("addEventListener('popstate'"));
 check('纯图片消息不朗读', app.includes('updateSpeakBtnVisibility') && app.includes("clone.querySelectorAll('.agent-img')") && app.includes("spk.classList.toggle('hidden'"));
+check('文件消息不朗读', app.includes("clone.querySelectorAll('.agent-file').forEach(n => n.remove())") && app.includes('文件不参与朗读'));
 check('图片失败兜底+重试', app.includes('img-fail-note') && app.includes('img-retry-btn') && app.includes('img-broken'));
 check('回合超时点此刷新', app.includes('scheduleTurnFallback') && app.includes('turnFallbackReload'));
 check('lanCall 超时控制', app.includes('AbortController') && app.includes('请求超时'));
