@@ -153,7 +153,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.39';
+const VERSION = '10.40';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1610,7 +1610,8 @@ function safeComfyPath(p) {
 // 只允许中继下载 uploads/ 下 pub-* 发布的文件，防路径穿越
 function safePubPath(p) {
   const s = String(p || '');
-  const m = /^\/uploads\/(pub-[A-Za-z0-9._-]+)$/.exec(s);
+  // 兼容 AI 回复里的完整链接（http://ip:port/uploads/pub-*）与相对路径，只取文件名走本地校验
+  const m = /^(?:https?:\/\/[^/]+)?\/uploads\/(pub-[A-Za-z0-9._-]+)$/.exec(s);
   if (!m) return null;
   const f = path.join(UPLOAD_DIR, m[1]);
   if (!f.startsWith(UPLOAD_DIR) || !fs.existsSync(f)) return null;

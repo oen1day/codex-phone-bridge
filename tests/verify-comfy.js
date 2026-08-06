@@ -159,6 +159,7 @@ check('前端去重错误前缀', app.includes("indexOf('下载失败:') === 0")
 check('AI 行为规范要求发布文件', server.includes('publish_file 工具') && server.includes('📄 [文件名](链接)'));
 check('server 有中继文件分片接口', server.includes("case 'fileData':") && server.includes('function safePubPath(') && server.includes('FILE_DATA_CHUNK'));
 check('server 分片只允许 pub-*', server.includes('pub-[A-Za-z0-9._-]+') && server.includes('仅支持 /uploads/pub-*'));
+check('server 分片兼容完整 URL', server.includes('https?:\\/\\/[^/]+') && server.includes('(pub-[A-Za-z0-9._-]+)$'));
 check('server 分片返回元信息', server.includes('params.meta') && server.includes('chunks: total') && server.includes('chunkBytes'));
 check('server 分片读取 base64', server.includes('buf.toString(\'base64\')') && server.includes('fs.readSync'));
 check('server 文件数据 HTTP 端点', server.includes("'/api/file/data'"));
