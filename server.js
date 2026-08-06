@@ -1186,9 +1186,10 @@ async function comfyGenerate(params) {
     graph['300'].inputs.prompt = prompt;
     if (params.seed != null) graph['300'].inputs.seed = Number(params.seed);
   } else {
-    graph['57'].inputs.text = prompt;
-    if (params.width != null) graph['57'].inputs.width = Number(params.width);
-    if (params.height != null) graph['57'].inputs.height = Number(params.height);
+    graph['27'].inputs.text = prompt;
+    if (params.width != null) graph['13'].inputs.width = Number(params.width);
+    if (params.height != null) graph['13'].inputs.height = Number(params.height);
+    if (params.seed != null) graph['3'].inputs.seed = Number(params.seed);
   }
 
   const imageSrc = params.imagePath || params.image;

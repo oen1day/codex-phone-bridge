@@ -21,9 +21,11 @@ const direct = JSON.parse(fs.readFileSync(path.join(wfDir, 'zimage_direct_api.js
 const upscale = JSON.parse(fs.readFileSync(path.join(wfDir, 'zimage_upscale_api.json'), 'utf8'));
 const gpt = JSON.parse(fs.readFileSync(path.join(wfDir, 'gptimage2_api.json'), 'utf8'));
 
-check('zimage 直出文件有生成节点+SaveImage', direct['57'] && direct['57'].class_type.startsWith('f2fdebf6') && direct['999'] && direct['999'].class_type === 'SaveImage');
+check('zimage 直出文件有 CLIPTextEncode+KSampler+SaveImage', direct['27'] && direct['27'].class_type === 'CLIPTextEncode' && direct['3'] && direct['3'].class_type === 'KSampler' && direct['999'] && direct['999'].class_type === 'SaveImage');
 check('zimage 超分文件有超分链+SaveImage', upscale['76'] && upscale['76'].class_type === 'ImageUpscaleWithModel' && upscale['77'] && upscale['999']);
 check('gptimage2 文件有 LoadImage+GPT+SaveImage', gpt['299'] && gpt['300'] && gpt['300'].class_type === 'OpenAIGPTImage1' && gpt['999']);
+check('三个文件 SaveImage 都带 filename_prefix', direct['999'].inputs.filename_prefix && upscale['999'].inputs.filename_prefix && gpt['999'].inputs.filename_prefix);
+check('zimage 用展开后的真实管线节点', direct['30'] && direct['30'].class_type === 'CLIPLoader' && direct['8'] && direct['8'].class_type === 'VAEDecode');
 check('server 有 comfyGenerate', server.includes('async function comfyGenerate('));
 check('server 有工作流映射', server.includes('zimage_direct_api.json') && server.includes('gptimage2_api.json'));
 check('server 能力开关校验', server.includes('图像生成未开启，请先在手机设置里开启'));

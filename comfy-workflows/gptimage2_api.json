@@ -23,7 +23,8 @@
   "999": {
     "class_type": "SaveImage",
     "inputs": {
-      "images": ["300", 0]
+      "images": ["300", 0],
+      "filename_prefix": "codex"
     }
   }
 }
