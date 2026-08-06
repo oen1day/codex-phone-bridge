@@ -36,6 +36,9 @@ check('server 有 HTTP 端点', server.includes("'/api/comfy/generate'"));
 check('app.js 处理 comfyProgress', app.includes("method === 'comfyProgress'") && app.includes('updateComfyProgress'));
 check('app.js 上报能力', app.includes('function reportCapabilities()') && app.includes("'reportCapabilities'"));
 check('MCP 有 generate_image', mcp.includes("name: 'generate_image'"));
+check('MCP 默认 gptimage2', mcp.includes("args.workflow || 'gptimage2'"));
+check('MCP 描述强调默认 gptimage2', mcp.includes('除非用户明确要求使用本地 z-image 生成'));
+check('server 默认 gptimage2', server.includes("params.workflow || 'gptimage2'"));
 check('MainActivity 有图像生成开关', java.includes('KEY_CAP_IMAGE_GEN') && java.includes('图像生成（ComfyUI'));
 check('config.example 有 comfyUrl', cfg.includes('comfyUrl'));
 

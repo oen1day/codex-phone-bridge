@@ -66,14 +66,14 @@ const TOOLS = [
   },
   {
     name: 'generate_image',
-    description: '在电脑端 ComfyUI 生成或编辑图片。workflow 取值：zimage（默认文生图）、zimage_upscale（文生图+超分）、gptimage2（OpenAI GPT Image2，可编辑可生成）。prompt 必填，中文描述即可。imagePath 可选：用户上传了图片且要用 gptimage2 编辑时传图片的本机路径或 /uploads/ 路径；不传 imagePath 时 gptimage2 自动走纯文生图模式。生成完成返回图片地址，请在回复中把图片展示给用户。需要在手机设置里开启“图像生成”能力。',
+    description: '在电脑端 ComfyUI 生成或编辑图片。workflow 取值：gptimage2（默认，OpenAI API，不吃本地电脑性能，可生成可编辑）、zimage（本地 ComfyUI z-image）、zimage_upscale（本地 z-image + 超分）。除非用户明确要求使用本地 z-image 生成，否则一律使用 gptimage2（不传 workflow 或传 gptimage2）。prompt 必填，中文描述即可。imagePath 可选：用户上传了图片且要用 gptimage2 编辑时传图片的本机路径或 /uploads/ 路径；不传 imagePath 时 gptimage2 自动走纯文生图模式。生成完成返回图片地址，请在回复中把图片展示给用户。需要在手机设置里开启“图像生成”能力。',
     inputSchema: {
       type: 'object',
       properties: {
         workflow: { type: 'string', enum: ['zimage', 'zimage_upscale', 'gptimage2'], description: '工作流' },
         prompt: { type: 'string', description: '生成/编辑要求（中文即可）' },
         imagePath: { type: 'string', description: '要编辑的图片路径（本机路径或 /uploads/ 路径），仅 gptimage2 编辑模式需要' },
-        upscale: { type: 'boolean', description: '是否超分（zimage 系列）' },
+        upscale: { type: 'boolean', description: '仅当 workflow=zimage 且为 true 时走本地超分版（等价 zimage_upscale）' },
         width: { type: 'integer', description: 'zimage 宽度（可选）' },
         height: { type: 'integer', description: 'zimage 高度（可选）' }
       },
@@ -218,7 +218,8 @@ async function handle(msg) {
         result = await api('/api/phone/device-status', {});
       } else if (name === 'generate_image') {
         if (!args.prompt) throw new Error('缺少 prompt 参数');
-        const wf = args.upscale ? 'zimage_upscale' : (args.workflow || 'zimage');
+        let wf = args.workflow || 'gptimage2';
+        if (wf === 'zimage' && args.upscale) wf = 'zimage_upscale';
         result = await api('/api/comfy/generate', {
           workflow: wf,
           prompt: args.prompt,

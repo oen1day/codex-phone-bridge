@@ -1171,7 +1171,7 @@ function findComfyInputDir() {
 async function comfyGenerate(params) {
   const caps = phoneCapsCache || {};
   if (!caps.image_generation) throw new BusinessError('图像生成未开启，请先在手机设置里开启');
-  const workflow = String(params.workflow || 'zimage');
+  const workflow = String(params.workflow || 'gptimage2');
   const file = COMFY_WORKFLOWS[workflow];
   if (!file) throw new BusinessError('未知工作流: ' + workflow);
   const prompt = String(params.prompt || '').trim();
