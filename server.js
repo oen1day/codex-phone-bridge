@@ -110,7 +110,8 @@ function loadConfig() {
     comfyApiKey: '',
     comfyAuthToken: '',
     comfyFirebaseRefreshToken: '',
-    openaiApiKey: ''
+    openaiApiKey: '',
+    imageProvider: 'comfy'
   }, cfg);
   if (!merged.workspace) merged.workspace = docs;
   if (!merged.codexHome) merged.codexHome = path.join(os.homedir(), '.codex');
@@ -122,6 +123,7 @@ function loadConfig() {
   if (!merged.comfyAuthToken) merged.comfyAuthToken = '';
   if (!merged.comfyFirebaseRefreshToken) merged.comfyFirebaseRefreshToken = '';
   if (!merged.openaiApiKey) merged.openaiApiKey = '';
+  if (merged.imageProvider !== 'openai') merged.imageProvider = 'comfy';
   return merged;
 }
 
@@ -1321,8 +1323,8 @@ async function comfyGenerate(params) {
   const workflow = String(params.workflow || 'gptimage2');
   const file = COMFY_WORKFLOWS[workflow];
   if (!file) throw new BusinessError('未知工作流: ' + workflow);
-  // gptimage2 直连 OpenAI 官方 API，不再提交本地 ComfyUI
-  if (workflow === 'gptimage2') {
+  // gptimage2 双通道：imageProvider=openai 时直连官方 API；默认 comfy 走云端节点（Comfy 积分）
+  if (workflow === 'gptimage2' && config.imageProvider === 'openai') {
     return await openaiGenerate(params);
   }
   const prompt = String(params.prompt || '').trim();
