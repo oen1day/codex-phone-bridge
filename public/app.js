@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.40';
+  const APP_VERSION = '10.41';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -1851,9 +1851,11 @@
     card.className = 'approval-card';
     card.innerHTML =
       '<div class="a-title">需要批准</div>' +
+      '<div class="a-body">' +
       (cmd ? '<div class="a-cmd">' + escapeHtml(cmd) + '</div>' : '') +
-      (p.cwd ? '<div class="a-cmd" style="margin-bottom:8px">目录: ' + escapeHtml(p.cwd) + '</div>' : '') +
-      (p.reason ? '<div style="font-size:12px;color:#c9a86a;margin-bottom:8px">原因: ' + escapeHtml(p.reason) + '</div>' : '') +
+      (p.cwd ? '<div class="a-cmd">目录: ' + escapeHtml(p.cwd) + '</div>' : '') +
+      (p.reason ? '<div class="a-reason">原因: ' + escapeHtml(p.reason) + '</div>' : '') +
+      '</div>' +
       '<div class="a-btns">' +
       '<button data-d="accept" class="btn primary">允许一次</button>' +
       '<button data-d="acceptForSession" class="btn">本次会话允许</button>' +

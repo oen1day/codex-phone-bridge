@@ -187,6 +187,7 @@ check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));
 check('style 确认弹窗样式', css.includes('.confirm-dialog') && css.includes('.confirm-box'));
+check('授权弹窗内容可滚动按钮固定', app.includes('class="a-body"') && css.includes('.approval-card .a-body') && css.includes('overflow-y: auto') && css.includes('max-height: 82vh') && css.includes('flex: 0 0 auto'));
 check('app 朗读超时按长度自适应', app.includes('function ttsTimeoutFor(') && app.includes('n * 1500 + 15000') && app.includes('Math.min(120000'));
 check('app 流式用自适应超时', app.includes('ttsTimeoutFor(streamText, 30000)'));
 check('app 长文本走分段合成', app.includes('clean.length > 30') && app.includes('playMessageSegments(convId, msgId, text, auto, temp)'));

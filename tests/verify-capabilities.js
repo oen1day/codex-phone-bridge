@@ -33,10 +33,10 @@ check('Java 有 getCapabilities', java.includes('public String getCapabilities()
 check('Java 有 getDeviceStatus', java.includes('public String getDeviceStatus()'));
 check('Java 默认关闭', java.includes('p.getBoolean(KEY_CAP_DEVICE_STATUS, false)'));
 check('Manifest 有网络状态权限', mani.includes('android.permission.ACCESS_NETWORK_STATE'));
-check('版本六处 10.40', mcp.includes("version: '10.40'") && server.includes("const VERSION = '10.40'") &&
-  app.includes("const APP_VERSION = '10.40'") && java.includes('"10.40"') &&
-  mani.includes('versionName="10.40"') && JSON.parse(vj).version === '10.40');
-check('versionCode 120', mani.includes('android:versionCode="120"'));
+check('版本六处 10.41', mcp.includes("version: '10.41'") && server.includes("const VERSION = '10.41'") &&
+  app.includes("const APP_VERSION = '10.41'") && java.includes('"10.41"') &&
+  mani.includes('versionName="10.41"') && JSON.parse(vj).version === '10.41');
+check('versionCode 121', mani.includes('android:versionCode="121"'));
 
 console.log('能力链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

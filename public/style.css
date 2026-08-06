@@ -360,16 +360,30 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
 /* ---------- 审批 ---------- */
 .approval-area { padding: 0 12px 8px; }
 .approval-card {
+  position: fixed;
+  left: 12px; right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
   border: 1px solid rgba(0, 210, 160, 0.25);
   background: var(--surface);
   border-radius: var(--radius-md);
   padding: 12px;
-  margin-bottom: 8px;
+  z-index: 85;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.6);
 }
 .approval-card .a-title {
   font-size: 14px; font-weight: 600; margin-bottom: 6px;
   color: var(--primary);
   font-family: var(--font-mono);
+}
+.approval-card .a-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .approval-card .a-cmd {
   font-family: var(--font-mono); font-size: 12px;
@@ -378,7 +392,16 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   border: 1px solid rgba(0, 210, 160, 0.12);
   word-break: break-all; margin-bottom: 8px;
 }
-.approval-card .a-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.approval-card .a-reason {
+  font-size: 12px; color: #c9a86a;
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+.approval-card .a-btns {
+  flex: 0 0 auto;
+  display: flex; gap: 8px; flex-wrap: wrap;
+  padding-top: 10px;
+}
 .approval-card .btn { flex: 1; min-width: 90px; font-size: 13px; padding: 9px 8px; }
 
 /* ---------- Toast ---------- */
