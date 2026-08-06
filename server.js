@@ -131,7 +131,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.20';
+const VERSION = '10.21';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -393,6 +393,10 @@ function handleServerMessage(msg) {
     activeTurn = { turnId: params.turn.id, threadId: params.threadId };
   }
   if (params.turnId && params.threadId) turnThreads.set(params.turnId, params.threadId);
+  turnLastEventAt = Date.now();
+  if (msg.method === 'turn/completed' || msg.method === 'turn/error') {
+    activeTurn = null;
+  }
   const hasId = msg.id != null;
   if (hasId) {
     // server-initiated request (approval / permission)
@@ -460,6 +464,18 @@ const bootstrapChannels = [];
 const relayPhones = new Map();
 const turnThreads = new Map();
 let activeTurn = null;
+let turnLastEventAt = Date.now();
+
+// turn 看门狗：5 分钟无任何事件 → 自动中断 codex 子进程并广播失败，界面可自恢复
+setInterval(() => {
+  if (!activeTurn) return;
+  if (Date.now() - turnLastEventAt < 5 * 60 * 1000) return;
+  const t = activeTurn;
+  activeTurn = null;
+  console.log('[slow] turn 超时中断: ' + t.threadId + '/' + t.turnId);
+  getClient().then(cl => cl.call('turn/interrupt', { threadId: t.threadId, turnId: t.turnId })).catch(() => {});
+  broadcast({ type: 'notification', method: 'turn/failed', params: { threadId: t.threadId, turnId: t.turnId, error: '电脑端回复超时已停止' } });
+}, 30000);
 
 // 只更新 config.json 的单个字段，绝不整体覆盖，避免清掉用户手填的配置（如 comfyFirebaseRefreshToken）
 function saveConfigField(key, value) {
@@ -1294,7 +1310,7 @@ async function openaiGenerate(params) {
   const size = normalizeOpenAISize(params.width, params.height, params.size);
   const quality = String(params.quality || 'auto');
   const promptId = crypto.randomBytes(8).toString('hex');
-  broadcast({ type: 'notification', method: 'comfyStarted', params: { workflow: 'gptimage2', startedAt: Date.now() } });
+  broadcast({ type: 'notification', method: 'comfyStarted', params: { promptId, workflow: 'gptimage2', startedAt: Date.now() } });
   try {
     let res;
     const imageSrc = params.imagePath || params.image;
@@ -1336,10 +1352,10 @@ async function openaiGenerate(params) {
     const id = crypto.randomBytes(8).toString('hex');
     const file = path.join(UPLOAD_DIR, 'comfy-' + id + '.png');
     fs.writeFileSync(file, Buffer.from(b64, 'base64'));
-    broadcast({ type: 'notification', method: 'comfyDone', params: {} });
+    broadcast({ type: 'notification', method: 'comfyDone', params: { promptId } });
     return { ok: true, path: file, url: '/uploads/comfy-' + id + '.png', workflow: 'gptimage2', promptId };
   } catch (e) {
-    broadcast({ type: 'notification', method: 'comfyError', params: { error: (e && e.message) || '未知错误' } });
+    broadcast({ type: 'notification', method: 'comfyError', params: { promptId, error: (e && e.message) || '未知错误' } });
     throw e;
   }
 }
@@ -1937,6 +1953,10 @@ async function handleApi(req, res, url) {
   const u = new URL(req.url, 'http://x');
   const p = u.pathname;
 
+  if (p === '/api/health' && req.method === 'GET') {
+    sendJson(res, 200, { ok: true });
+    return;
+  }
   if (p === '/api/login' && req.method === 'POST') {
     pruneSessions();
     const ip = req.socket.remoteAddress || '';
@@ -2135,6 +2155,11 @@ async function handleApi(req, res, url) {
 
 // ---------- HTTP server ----------
 const server = http.createServer((req, res) => {
+  const t0 = Date.now();
+  res.on('finish', () => {
+    const dur = Date.now() - t0;
+    if (dur > 10000) console.log('[slow] ' + req.method + ' ' + (req.url || '') + ' ' + dur + 'ms');
+  });
   const u = new URL(req.url, 'http://x');
   const p = u.pathname;
 

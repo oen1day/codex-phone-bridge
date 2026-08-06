@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.20';
+  const APP_VERSION = '10.21';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -702,7 +702,7 @@
       let data = null;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          data = await apiCall('threadReadPage', { threadId: id, limit: 10 });
+          data = await apiCall('threadReadPage', { threadId: id, limit: 10 }, 8000);
           break;
         } catch (e) {
           lastErr = (e && e.message) || '未知错误';
@@ -740,10 +740,12 @@
       setStatus('读取对话失败', true);
       const failEl = document.createElement('div');
       failEl.className = 'thread-loading system-line';
-      failEl.innerHTML = '⚠ 读取历史对话失败：' + escapeHtml(msg) + '　<span class="link-btn" id="retryThreadBtn">点此重试</span>';
+      failEl.innerHTML = '⚠ 读取历史对话失败：' + escapeHtml(msg) + '　<span class="link-btn" id="retryThreadBtn">点此重试</span>　<span class="link-btn" id="reconnectThreadBtn">重连</span>';
       messagesEl.appendChild(failEl);
       const btn = failEl.querySelector('#retryThreadBtn');
       if (btn) btn.addEventListener('click', () => { failEl.remove(); openThread(id); });
+      const rcBtn = failEl.querySelector('#reconnectThreadBtn');
+      if (rcBtn) rcBtn.addEventListener('click', () => { failEl.remove(); reconnectAll(); });
       showToast('读取对话失败: ' + msg, true);
     }
   }
@@ -1193,12 +1195,45 @@
       el.innerHTML = '⚠ 回复似乎卡住了，<span class="link-btn" id="turnFallbackReload">点此刷新</span>';
       messagesEl.appendChild(el);
       const b = el.querySelector('#turnFallbackReload');
-      if (b) b.addEventListener('click', () => location.reload());
+      if (b) b.addEventListener('click', async () => {
+        if (relayCfg) { location.reload(); return; }
+        try {
+          const h = await fetch('/api/health', { cache: 'no-store' });
+          if (h.ok) { location.reload(); return; }
+        } catch (_) {}
+        showToast('电脑端无响应，请重启电脑端 start.bat', true);
+        setStatus('电脑端无响应，请重启 start.bat', true);
+      });
       scrollBottom();
     }, (sec || 60) * 1000);
   }
   function cancelTurnFallback() {
     if (turnFallbackTimer) { clearTimeout(turnFallbackTimer); turnFallbackTimer = null; }
+  }
+
+  // 电脑端探活 + 全链路重连：SSE / 中继 / 会话列表 / 当前对话
+  async function reconnectAll() {
+    showToast('正在重连…');
+    try {
+      if (!relayCfg) {
+        const h = await fetch('/api/health', { cache: 'no-store' });
+        if (!h.ok) throw new Error('health');
+      }
+      if (relayCfg) {
+        stopAllRelayChannels();
+        relayChannel = null;
+        await connectRelay();
+        reportCapabilities();
+      }
+      if (es) { try { es.close(); } catch (_) {} connectSSE(); }
+      await loadThreads();
+      if (state.currentId) await openThread(state.currentId);
+      showToast('已重连');
+      setStatus('已连接');
+    } catch (e) {
+      showToast('电脑端无响应，请重启电脑端 start.bat', true);
+      setStatus('电脑端无响应，请重启 start.bat', true);
+    }
   }
 
   function scrollBottom() {
@@ -1247,14 +1282,14 @@
       startTurnPolling();
       startTurnWatchdog();
     } else if (method === 'comfyStarted') {
-      startComfyProgress();
+      startComfyProgress(params.promptId);
     } else if (method === 'comfyProgress') {
-      updateComfyProgress(params.value, params.max);
+      updateComfyProgress(params.promptId, params.value, params.max);
     } else if (method === 'comfyDone') {
-      finishComfyProgress();
+      finishComfyProgress(params.promptId);
       scheduleTurnFallback(60); // 图已生成，若回合迟迟不结束则提示刷新恢复
     } else if (method === 'comfyError') {
-      finishComfyProgress();
+      finishComfyProgress(params.promptId);
       addSystemLine('⚠️ 图像生成失败: ' + ((params.error) || '未知错误'));
     } else if (method === 'turn/completed') {
       cancelTurnFallback();
@@ -1338,7 +1373,7 @@
       const label = friendlyToolLabel(item);
       addBlock(agentEl, { kind: 'tool', id: item.id, label, status: '进行中' });
       // 卡片双保险：comfyStarted 未到前，只要检测到 AI 在调 generate_image 就主动显示占位卡
-      if (/generate_image/i.test(String(item.tool || item.name || ''))) startComfyProgress();
+      if (/generate_image/i.test(String(item.tool || item.name || ''))) startComfyProgress('tool-' + item.id);
     }
   }
 
@@ -1374,7 +1409,7 @@
       const label = item.type === 'webSearch' ? '搜索: ' + (item.query || '')
         : (item.type === 'mcpToolCall' ? (item.server || '') + ' → ' + (item.tool || '') : '工具: ' + (item.tool || ''));
       block.textContent = '🔧 ' + label + (item.status ? ' ｜ ' + item.status : '');
-      if (/generate_image/i.test(String(item.tool || item.name || ''))) finishComfyProgress();
+      if (/generate_image/i.test(String(item.tool || item.name || ''))) finishComfyProgress('tool-' + item.id);
     }
     scrollBottom();
   }
@@ -1809,58 +1844,89 @@
     '<path d="M200 164 Q208 146 206 128 Q212 138 218 130 Q224 142 228 164 Z" fill="#7fd4bd" opacity="0.8"/>' +
     '</svg>';
 
-  let comfyCardEl = null;
-  let comfyBadgeEl = null;
-  let comfyTimer = null;
-  let comfyStartTs = 0;
-  let comfyPct = null;
-  let comfyGenSeq = 0;
+  const comfyCards = new Map(); // promptId -> { id, card, badge, timer, startTs, pct, state, seq }
+  let comfySeq = 0;
 
-  function updateComfyBadge() {
-    if (!comfyBadgeEl) return;
-    const sec = Math.floor((Date.now() - comfyStartTs) / 1000);
-    comfyBadgeEl.textContent = '生成中 ' + sec + 's' + (comfyPct != null ? ' · ' + comfyPct + '%' : '');
+  function updateComfyBadge(rec) {
+    if (!rec || !rec.badge) return;
+    if (rec.state === 'generating') {
+      const sec = Math.floor((Date.now() - rec.startTs) / 1000);
+      rec.badge.textContent = '生成中 ' + sec + 's' + (rec.pct != null ? ' · ' + rec.pct + '%' : '');
+    }
   }
 
-  function startComfyProgress() {
-    finishComfyProgress();
-    const seq = ++comfyGenSeq;
-    comfyCardEl = document.createElement('div');
-    comfyCardEl.className = 'comfy-generating';
-    comfyCardEl.innerHTML = '<div class="comfy-placeholder">' + COMFY_PLACEHOLDER_SVG + '</div><div class="comfy-badge"></div>';
+  function startComfyProgress(id) {
+    if (!id) id = 'seq' + (++comfySeq);
+    if (comfyCards.has(id)) return;
+    let generating = null;
+    for (const c of comfyCards.values()) if (c.state === 'generating') { generating = c; break; }
+    const card = document.createElement('div');
+    card.className = 'comfy-generating';
+    card.innerHTML = '<div class="comfy-placeholder">' + COMFY_PLACEHOLDER_SVG + '</div><div class="comfy-badge"></div>';
     // 内联样式兜底：绕过 CSS 缓存/flex 挤压，保证卡片高度不被压成 0
-    comfyCardEl.style.cssText = 'display:block; flex:0 0 auto; min-height:180px; margin:4px auto 12px; order:9999;';
-    const ph = comfyCardEl.querySelector('.comfy-placeholder');
+    card.style.cssText = 'display:block; flex:0 0 auto; min-height:180px; margin:4px auto 12px; order:9999;';
+    const ph = card.querySelector('.comfy-placeholder');
     if (ph) ph.style.cssText = 'width:100%; height:180px; display:block;';
-    const bd = comfyCardEl.querySelector('.comfy-badge');
+    const bd = card.querySelector('.comfy-badge');
     if (bd) bd.style.cssText = 'position:absolute; top:8px; left:8px;';
-    messagesEl.appendChild(comfyCardEl);
-    comfyBadgeEl = comfyCardEl.querySelector('.comfy-badge');
-    comfyStartTs = Date.now();
-    comfyPct = null;
-    updateComfyBadge();
-    comfyTimer = setInterval(updateComfyBadge, 1000);
+    messagesEl.appendChild(card);
+    const rec = { id, card, badge: bd, timer: null, startTs: 0, pct: null, state: 'queued', seq: ++comfySeq };
+    comfyCards.set(id, rec);
+    if (generating) {
+      if (bd) bd.textContent = '排队中';
+    } else {
+      rec.state = 'generating';
+      rec.startTs = Date.now();
+      updateComfyBadge(rec);
+      rec.timer = setInterval(() => updateComfyBadge(rec), 1000);
+    }
     scrollBottom();
   }
 
-  function updateComfyProgress(value, max) {
-    comfyPct = max > 0 ? Math.min(100, Math.round(Number(value) * 100 / Number(max))) : 0;
-    updateComfyBadge();
+  function updateComfyProgress(id, value, max) {
+    const rec = comfyCards.get(id);
+    if (!rec) return;
+    rec.pct = max > 0 ? Math.min(100, Math.round(Number(value) * 100 / Number(max))) : 0;
+    updateComfyBadge(rec);
   }
 
-  function finishComfyProgress() {
-    if (comfyTimer) { clearInterval(comfyTimer); comfyTimer = null; }
-    const seq = comfyGenSeq;
+  function finishComfyProgress(id) {
+    if (id == null) {
+      // 兼容无 id：清空所有卡片
+      for (const rec of [...comfyCards.values()]) removeComfyCard(rec);
+      return;
+    }
+    const rec = comfyCards.get(id);
+    if (!rec) return;
+    removeComfyCard(rec);
+    promoteNextComfyCard();
+  }
+
+  function removeComfyCard(rec) {
+    if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
+    const hasQueued = [...comfyCards.values()].some(c => c.state === 'queued');
     const doRemove = () => {
-      if (seq !== comfyGenSeq) return; // 已有新卡片，不误删
-      if (comfyCardEl && comfyCardEl.parentNode) comfyCardEl.parentNode.removeChild(comfyCardEl);
-      comfyCardEl = null;
-      comfyBadgeEl = null;
-      comfyPct = null;
+      if (rec.card && rec.card.parentNode) rec.card.parentNode.removeChild(rec.card);
+      comfyCards.delete(rec.id);
+      if (!hasQueued) return;
+      promoteNextComfyCard();
     };
-    // 最短可见约 1.5 秒，避免一闪而过
-    const wait = Math.max(0, 1500 - (Date.now() - comfyStartTs));
+    // 生成中卡最短可见约 1.5 秒（无排队时）；有排队则立即让下一张转生成
+    const wait = (!hasQueued && rec.state === 'generating') ? Math.max(0, 1500 - (Date.now() - rec.startTs)) : 0;
     if (wait > 0) { setTimeout(doRemove, wait); } else { doRemove(); }
+  }
+
+  function promoteNextComfyCard() {
+    let next = null;
+    for (const rec of comfyCards.values()) {
+      if (rec.state === 'queued' && (!next || rec.seq < next.seq)) next = rec;
+    }
+    if (!next) return;
+    next.state = 'generating';
+    next.startTs = Date.now();
+    next.pct = null;
+    updateComfyBadge(next);
+    next.timer = setInterval(() => updateComfyBadge(next), 1000);
   }
 
   // 把手机端能力开关状态告诉电脑（图像生成等能力在电脑侧执行前需要校验）
