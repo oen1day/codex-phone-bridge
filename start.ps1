@@ -65,12 +65,24 @@ if (-not (Test-Path $cfgPath)) {
 Write-Host ''
 Write-Host '==============================================' -ForegroundColor Cyan
 Write-Host '  鳍点AI' -ForegroundColor Cyan
+Write-Host '  ── 局域网模式（手机和电脑需连同一个 Wi-Fi）──' -ForegroundColor DarkGray
 Write-Host "  电脑上打开: http://localhost:$($cfg.port)" -ForegroundColor Green
 if ($ip) {
   Write-Host "  手机上打开: http://$ip`:$($cfg.port)" -ForegroundColor Green
-  Write-Host '  (手机和电脑需连同一个 Wi-Fi)' -ForegroundColor DarkGray
 }
 Write-Host "  访问密码: $($cfg.password)" -ForegroundColor Yellow
+if ($cfg.relayEnabled -ne $false) {
+  Write-Host '  ── 中继模式（手机跨网络，走流量）──' -ForegroundColor DarkGray
+  $room = $cfg.relayRoomCode
+  if (-not $room) { $room = '生成中…（服务启动后自动生成）' }
+  Write-Host "  手机配对码(流量用): $room" -ForegroundColor Green
+  if ($cfg.shareKey) {
+    Write-Host "  一键配置密钥: $($cfg.shareKey)（新手机在设置里输入自动配置）" -ForegroundColor Green
+  }
+  if ($cfg.relayBroker) {
+    Write-Host "  中继服务器: $($cfg.relayBroker)" -ForegroundColor DarkGray
+  }
+}
 Write-Host '  关闭本窗口即停止服务' -ForegroundColor DarkGray
 Write-Host '==============================================' -ForegroundColor Cyan
 Write-Host ''
