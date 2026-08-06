@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.23';
+  const APP_VERSION = '10.24';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -670,7 +670,6 @@
   }
 
   async function openThread(id) {
-    finishComfyProgress();
     stopTurnPolling();
     stopTurnWatchdog();
     if (id !== state.currentId) {
@@ -767,6 +766,8 @@
     for (const el of messagesEl.querySelectorAll('.msg.agent')) updateSpeakBtnVisibility(el);
     // 分页未加载完整历史时跳过音频清理，避免误删未加载消息的缓存
     if (!state.threadPage.hasMore) pruneConvAudio(state.currentId, aiIds);
+    // 历史渲染完成后兜底重挂生成中的进度堆叠（切换对话不清卡）
+    restoreComfyStackIfNeeded();
   }
 
   async function loadMoreThread() {
@@ -1855,13 +1856,32 @@
   let comfySeq = 0;
   let comfyStackEl = null;
 
+  // 堆叠容器独立于消息列表：挂在 #messages 之外（同父级、紧跟其后），
+  // 这样切换对话/清空历史消息不会抹掉生成中的卡片。
   function ensureComfyStack() {
     if (!comfyStackEl || !comfyStackEl.parentNode) {
       comfyStackEl = document.createElement('div');
       comfyStackEl.className = 'comfy-stack';
-      messagesEl.appendChild(comfyStackEl);
+      const host = (messagesEl && messagesEl.parentNode) ? messagesEl.parentNode : document.body;
+      host.insertBefore(comfyStackEl, messagesEl ? messagesEl.nextSibling : null);
     }
+    // 兜底重挂：容器/卡片 DOM 意外丢失但仍有生成任务时，按 Map 恢复每张卡
+    for (const rec of comfyCards.values()) {
+      if (rec.card && rec.card.parentNode) continue;
+      const made = makeComfyCard();
+      rec.card = made.card;
+      rec.badge = made.badge;
+      comfyStackEl.appendChild(rec.card);
+      updateComfyBadge(rec);
+    }
+    reflowComfyStack();
     return comfyStackEl;
+  }
+
+  function restoreComfyStackIfNeeded() {
+    if (comfyCards.size === 0) return;
+    ensureComfyStack();
+    scrollBottom();
   }
 
   function removeComfyStackIfEmpty() {

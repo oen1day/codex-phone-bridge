@@ -94,6 +94,10 @@ check('预创建池绑定', app.includes('function bindComfyCard(') && app.inclu
 check('抽走/上浮连续动效', app.includes("translate(10px, -10px) scale(0.98)") && app.includes("translate(0, 6px) scale(0.97)") && app.includes('next.rising = true') && app.includes('rec.card.style.zIndex = isTop ? String(recs.length + 1)'));
 check('回合结束清理残留卡', app.includes('function clearComfyCards()') && app.includes('clearComfyCards(); // 回合结束'));
 check('工具兜底仅在无卡时建卡', app.includes("comfyCards.size === 0) startComfyProgress('tool-'"));
+check('切对话不清进度卡', !app.includes('async function openThread(id) {\n    finishComfyProgress();') && app.includes('async function openThread(id) {'));
+check('堆叠容器挂在消息区外', app.includes('host.insertBefore(comfyStackEl, messagesEl ? messagesEl.nextSibling : null)') && !app.includes('messagesEl.appendChild(comfyStackEl)'));
+check('历史渲染后兜底重挂堆叠', app.includes('function restoreComfyStackIfNeeded()') && app.includes('restoreComfyStackIfNeeded();'));
+check('堆叠容器样式改为聊天区固定位', css.includes('margin: 0 12px 12px') && !css.includes('margin-top: auto'));
 check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
 check('app 内置全屏查看器', app.includes('openImageViewerOverlay') && app.includes('viewerScale') && app.includes("('ontouchstart' in window)"));
 check('style 有查看器遮罩', css.includes('.viewer-overlay') && css.includes('touch-action: none'));
