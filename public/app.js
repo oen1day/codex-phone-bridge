@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.13';
+  const APP_VERSION = '10.14';
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -899,7 +899,9 @@
 
   // 把 AI 回复里的 ![说明](图片地址) 渲染成图片 + 保存按钮（其余内容保持转义）
   function renderAgentTextWithImages(text) {
-    const parts = String(text || '').split(/!\[([^\]]*)\]\(([^)]+)\)/);
+    // 兼容 AI 回复里 [文件名](.../uploads/xxx.png) 形式的本地链接：也当图片渲染
+    const normalized = String(text || '').replace(/\[([^\]]*)\]\(([^)]*\/uploads\/[^)]+)\)/g, '![$1]($2)');
+    const parts = normalized.split(/!\[([^\]]*)\]\(([^)]+)\)/);
     let html = '';
     for (let i = 0; i < parts.length; i += 3) {
       html += escapeHtml(parts[i] || '');
@@ -1623,6 +1625,7 @@
   let comfyTimer = null;
   let comfyStartTs = 0;
   let comfyPct = null;
+  let comfyGenSeq = 0;
 
   function updateComfyBadge() {
     if (!comfyBadgeEl) return;
@@ -1632,6 +1635,7 @@
 
   function startComfyProgress() {
     finishComfyProgress();
+    const seq = ++comfyGenSeq;
     comfyCardEl = document.createElement('div');
     comfyCardEl.className = 'comfy-generating';
     comfyCardEl.innerHTML = '<div class="comfy-placeholder">' + COMFY_PLACEHOLDER_SVG + '</div><div class="comfy-badge"></div>';
@@ -1651,10 +1655,17 @@
 
   function finishComfyProgress() {
     if (comfyTimer) { clearInterval(comfyTimer); comfyTimer = null; }
-    if (comfyCardEl && comfyCardEl.parentNode) comfyCardEl.parentNode.removeChild(comfyCardEl);
-    comfyCardEl = null;
-    comfyBadgeEl = null;
-    comfyPct = null;
+    const seq = comfyGenSeq;
+    const doRemove = () => {
+      if (seq !== comfyGenSeq) return; // 已有新卡片，不误删
+      if (comfyCardEl && comfyCardEl.parentNode) comfyCardEl.parentNode.removeChild(comfyCardEl);
+      comfyCardEl = null;
+      comfyBadgeEl = null;
+      comfyPct = null;
+    };
+    // 最短可见约 1.5 秒，避免一闪而过
+    const wait = Math.max(0, 1500 - (Date.now() - comfyStartTs));
+    if (wait > 0) { setTimeout(doRemove, wait); } else { doRemove(); }
   }
 
   // 把手机端能力开关状态告诉电脑（图像生成等能力在电脑侧执行前需要校验）

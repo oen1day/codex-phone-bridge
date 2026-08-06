@@ -131,7 +131,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.13';
+const VERSION = '10.14';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -2166,17 +2166,24 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (p === '/uploads/') {
+  if (p.startsWith('/uploads/')) {
     if (!auth(req)) {
       sendJson(res, 401, { error: '需要登录' });
       return;
     }
-    const file = path.join(UPLOAD_DIR, path.basename(p));
+    const name = path.basename(p);
+    if (!name) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
+    const file = path.join(UPLOAD_DIR, name);
     if (!file.startsWith(UPLOAD_DIR) || !fs.existsSync(file)) {
       sendJson(res, 404, { error: 'Not found' });
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+    const ext = path.extname(name).toLowerCase();
+    const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : (ext === '.webp' ? 'image/webp' : (ext === '.gif' ? 'image/gif' : 'image/png'));
+    res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'no-cache' });
     fs.createReadStream(file).pipe(res);
     return;
   }

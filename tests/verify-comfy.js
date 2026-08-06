@@ -50,6 +50,7 @@ check('能力缓存持久化', server.includes('PHONE_CAPS_PATH') && server.incl
 check('server 有删除图片接口', server.includes('deleteComfyImage') && server.includes("'/api/images/delete'"));
 check('server 有中继取图接口', server.includes('comfyImageDataUrl') && server.includes("'/api/comfy-image'"));
 check('server 有 30 分钟兜底清理', server.includes('function cleanupComfyImages') && server.includes('30 * 60 * 1000'));
+check('server 图片服务前缀匹配', server.includes("p.startsWith('/uploads/')") && server.includes("path.basename(p)"));
 check('MCP 有 generate_image', mcp.includes("name: 'generate_image'"));
 check('MCP 默认 gptimage2', mcp.includes("args.workflow || 'gptimage2'"));
 check('MCP 描述强调默认 gptimage2', mcp.includes('除非用户明确要求使用本地 z-image 生成'));
@@ -73,6 +74,8 @@ check('Java 有 App 内缓存方法', java.includes('cacheImageToApp') && java.i
 check('Manifest 有低版本存储权限', read('android/AndroidManifest.xml').includes('WRITE_EXTERNAL_STORAGE'));
 const css = read('public/style.css');
 check('占位卡有固有宽高比', app.includes('width="320" height="200"') && css.includes('aspect-ratio: 320 / 200'));
+check('卡片最短可见 1.5 秒', app.includes('1500 - (Date.now() - comfyStartTs)'));
+check('兼容本地链接图片格式', app.includes("[^)]*\\/uploads\\/[^)]+"));
 check('style.css 有占位卡片样式', css.includes('.comfy-generating') && css.includes('.comfy-placeholder') && css.includes('.comfy-badge') && css.includes('comfy-breathe'));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
