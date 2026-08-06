@@ -174,6 +174,14 @@ check('server 用户消息只存原文', server.includes("if (userText) input.pu
 check('server 历史剥离系统要求', server.includes('function cleanThreadHistory(') && server.includes('SYSTEM_REQUIREMENT.trim()') && server.includes('\\[系统要求：[\\s\\S]*\\]'));
 check('前端过滤历史系统要求', app.includes('\\[系统要求：[\\s\\S]*\\]') && app.includes('兜底：历史里混入的系统要求不再显示'));
 check('前端用户气泡兜底过滤', app.includes('兜底：不把系统要求显示在用户气泡里'));
+check('app 自动朗读等预生成缓存', app.includes('function waitTtsStatus(') && app.includes('setTimeout(tick, 500)') && app.includes('waitTtsStatus(clean, 15000)'));
+check('app 流式 30 秒超时', app.includes('setTimeout(() => ctl.abort(), 30000)') && app.includes('signal: ctl.signal'));
+check('app 流式失败等缓存再降级', app.includes('waitTtsStatus(streamText, 8000)') && app.includes('playMessageSegments(convId, msgId, streamText, auto, temp)'));
+check('app 单回合生图上限', app.includes('let turnGenCount = 0') && app.includes('turnGenCount++') && app.includes('本回合生图已达 6 张上限'));
+check('server 用户文本剥离系统提示段', server.includes("String(body.text || '').replace") && server.includes('\\[系统要求：[\\s\\S]*?\\]'));
+check('server 自动朗读也预生成', server.includes('if (text) queuePreGen(text, auto)'));
+check('server TTS 请求日志', server.includes("[tts] /api/tts/stream") && server.includes("[tts] ttsStatus") && server.includes('[tts] /api/tts 耗时'));
+check('MCP 生图意图闸门', mcp.includes('只有用户明确要求出图') && mcp.includes('Word/PPT/PDF/Excel/文档/文件/表格/文本时禁止调用') && mcp.includes('粘贴的更新日志'));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

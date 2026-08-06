@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.35';
+  const APP_VERSION = '10.36';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -82,6 +82,7 @@
   let lastTurnActivityAt = 0;
   let liveReplyId = null;
   let liveSeq = 0;
+  let turnGenCount = 0; // 本回合 generate_image 调用计数（防误触堆积卡片）
   let turnStartLastMsgId = null;
   let quotedMsg = null;
   let autoSpeak = true;
@@ -1463,6 +1464,7 @@
     lastTurnActivityAt = Date.now();
 
     if (method === 'turn/started') {
+      turnGenCount = 0; // 新回合重置生图计数
       state.turnId = params.turn && params.turn.id;
       state.running = true;
       turnStartLastMsgId = currentLastMsgId();
@@ -1571,8 +1573,13 @@
       addBlock(agentEl, { kind: 'tool', id: item.id, label, status: '进行中' });
       // 卡片双保险：没有等待绑定的预创建卡时，检测到 generate_image 就兜底建卡
       if (/generate_image/i.test(String(item.tool || item.name || ''))) {
+        turnGenCount++;
         const hasUnbound = [...comfyCards.values()].some(r => !r.bound);
-        if (!hasUnbound) startComfyProgress('tool-' + item.id);
+        if (turnGenCount > 6) {
+          if (!hasUnbound) showToast('本回合生图已达 6 张上限，请新开消息继续', true);
+        } else if (!hasUnbound) {
+          startComfyProgress('tool-' + item.id);
+        }
       }
     }
   }
@@ -1911,6 +1918,7 @@
       if (turn && turn.id) {
         state.turnId = turn.id;
         state.running = true;
+        turnGenCount = 0;
         replySeen[turn.id] = false;
         setStatus('正在运行…');
         $('interruptBtn').classList.remove('hidden');
@@ -3006,6 +3014,20 @@
     return null;
   }
 
+  // 自动朗读：等预生成缓存就绪（每 0.5s 轮询，最长 maxMs），避免与语音服务实时锁互抢
+  function waitTtsStatus(text, maxMs) {
+    return new Promise(resolve => {
+      const t0 = Date.now();
+      const tick = async () => {
+        const st = await tryTtsStatus(text);
+        if (st && !st.partial) { resolve(st); return; }
+        if (Date.now() - t0 >= maxMs) { resolve(null); return; }
+        setTimeout(tick, 500);
+      };
+      tick();
+    });
+  }
+
   async function runTtsStream(convId, msgId, streamText, startIdx, auto, temp, session) {
     const msgKey = ttsKey(convId, msgId);
     const sid = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -3013,20 +3035,38 @@
     ttsLanReader = null;
     try {
       if (relayCfg) {
-        await apiCall('ttsStreamStart', { text: streamText }, 20000);
+        await apiCall('ttsStreamStart', { text: streamText }, 30000);
       } else {
-        const res = await fetch('/api/tts/stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: streamText })
-        });
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 30000); // 流式 30 秒超时，不再无限等
+        let res;
+        try {
+          res = await fetch('/api/tts/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: streamText }),
+            signal: ctl.signal
+          });
+        } finally {
+          clearTimeout(timer);
+        }
         if (!res.ok || !res.body) throw new Error('语音流服务返回 ' + res.status);
         consumeLanTtsStream(res, sid, session);
       }
     } catch (e) {
-      // 流式不可用，退回分段合成
+      // 流式不可用/超时：自动朗读先等预生成缓存，仍不行再退回分段合成
       ttsStreamState = null;
       if (session !== ttsSession) return;
+      if (auto) {
+        const st2 = await waitTtsStatus(streamText, 8000);
+        if (session !== ttsSession) return;
+        if (st2 && !st2.partial) {
+          const blob = b64ToBlob(st2.audioB64, st2.mime || 'audio/wav');
+          await playTtsSegment(msgKey, blob, session);
+          if (session === ttsSession) finishTts(msgKey);
+          return;
+        }
+      }
       playMessageSegments(convId, msgId, streamText, auto, temp);
       return;
     }
@@ -3101,8 +3141,8 @@
     setSpeakBtn(msgKey, 'loading');
     showToast('正在生成语音…');
 
-    // 1) 电脑端整段缓存（回复完成后已自动预生成 → 秒播）
-    const st = await tryTtsStatus(clean);
+    // 1) 电脑端整段缓存（自动朗读等预生成完成，秒播；手动点播直接查）
+    const st = auto ? await waitTtsStatus(clean, 15000) : await tryTtsStatus(clean);
     if (st && !st.partial) {
       const blob = b64ToBlob(st.audioB64, st.mime || 'audio/wav');
       if (session !== ttsSession || state.currentId !== convId) return;

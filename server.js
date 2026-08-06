@@ -153,7 +153,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.35';
+const VERSION = '10.36';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -454,7 +454,7 @@ function handleServerMessage(msg) {
       preGenTexts.delete(tid);
       const auto = turnAutoSpeak.get(tid) !== false;
       turnAutoSpeak.delete(tid);
-      if (text && !auto) queuePreGen(text, auto); // 自动朗读开启时跳过整段预生成，避免与实时请求互抢
+      if (text) queuePreGen(text, auto); // 自动朗读也预生成整段，手机端等缓存就绪后秒播，不再与实时请求抢锁
     }
   }
   console.log('[codex] 事件: ' + msg.method + (msg.params && msg.params.threadId ? ' #' + msg.params.threadId : ''));
@@ -1730,7 +1730,8 @@ async function apiDispatch(method, params, clientId) {
       if (clientId && owner && owner !== clientId) throw new Error('该对话属于其他设备，请使用自己的对话');
       registerPhoneThread(threadId, clientId);
       const input = [];
-      const userText = body.text ? String(body.text) : '';
+      // 用户粘贴日志/更新说明时，剥掉 [系统要求：…] 等系统提示段，不当作指令
+      const userText = String(body.text || '').replace(/\s*\[系统要求：[\s\S]*?\]\s*/g, ' ').replace(/\s+/g, ' ').trim();
       // 用户消息只存原文；系统要求作为独立文本项注入，读取历史时会被剥离，不显示在用户气泡里
       if (userText) input.push({ type: 'text', text: userText });
       if (userText) input.push({ type: 'text', text: SYSTEM_REQUIREMENT });
@@ -1806,10 +1807,12 @@ async function apiDispatch(method, params, clientId) {
     case 'ping':
       return { ok: true, room: config.relayRoomCode, version: VERSION, time: Date.now() };
     case 'ttsGenerate': {
+      const t0 = Date.now();
       cancelPreGen();
       ttsRealTimeBusy = true;
       try {
         const r = await ttsGenerate(params.text);
+        console.log('[tts] relay ttsGenerate 耗时 ' + (Date.now() - t0) + 'ms 文本 ' + String(params.text || '').length + '字 preGen=' + preGenRunning);
         return { ok: true, mime: r.mime, audioB64: r.buf.toString('base64') };
       } finally {
         ttsRealTimeBusy = false;
@@ -1869,7 +1872,9 @@ async function apiDispatch(method, params, clientId) {
       return { ok: true };
     }
     case 'ttsStatus': {
-      return ttsStatusFor(params.text);
+      const st = ttsStatusFor(params.text);
+      console.log('[tts] ttsStatus 命中=' + !!(st && st.ready) + ' 文本 ' + String(params.text || '').length + '字 preGen=' + preGenRunning + ' busy=' + ttsRealTimeBusy);
+      return st;
     }
     case 'phoneApps':
       return phoneRpc('listApps', {}, 30000);
@@ -2218,6 +2223,7 @@ async function handleApi(req, res, url) {
       return;
     }
     if (p === '/api/tts' && req.method === 'POST') {
+      const t0 = Date.now();
       const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
       cancelPreGen(); // 网页朗读同样是实时请求，优先于预生成
       ttsRealTimeBusy = true;
@@ -2227,10 +2233,12 @@ async function handleApi(req, res, url) {
       } finally {
         ttsRealTimeBusy = false;
         processPreGenQueue();
+        console.log('[tts] /api/tts 耗时 ' + (Date.now() - t0) + 'ms 文本 ' + String(body.text || '').length + '字 preGen=' + preGenRunning);
       }
       return;
     }
     if (p === '/api/tts/stream' && req.method === 'POST') {
+      const t0 = Date.now();
       const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-cache' });
       try {
@@ -2249,7 +2257,9 @@ async function handleApi(req, res, url) {
           () => { try { res.end(); } catch (_) {} }
         );
         await r.task;
+        console.log('[tts] /api/tts/stream 完成 耗时 ' + (Date.now() - t0) + 'ms 文本 ' + String(body.text || '').length + '字 preGen=' + preGenRunning);
       } catch (e) {
+        console.log('[tts] /api/tts/stream 失败 耗时 ' + (Date.now() - t0) + 'ms ' + ((e && e.message) || e) + ' preGen=' + preGenRunning);
         try { res.end(); } catch (_) {}
       }
       return;
@@ -2261,8 +2271,11 @@ async function handleApi(req, res, url) {
       return;
     }
     if (p === '/api/tts/status' && req.method === 'POST') {
+      const t0 = Date.now();
       const body = JSON.parse((await readBody(req, 1024 * 1024)) || '{}');
-      sendJson(res, 200, ttsStatusFor(body.text));
+      const st = ttsStatusFor(body.text);
+      console.log('[tts] /api/tts/status 命中=' + !!(st && st.ready) + ' 耗时 ' + (Date.now() - t0) + 'ms 文本 ' + String(body.text || '').length + '字 preGen=' + preGenRunning + ' busy=' + ttsRealTimeBusy);
+      sendJson(res, 200, st);
       return;
     }
     if (p === '/api/phone/apps' && req.method === 'POST') {
