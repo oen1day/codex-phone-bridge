@@ -177,11 +177,15 @@ check('前端用户气泡兜底过滤', app.includes('兜底：不把系统要�
 check('app 自动朗读等预生成缓存', app.includes('function waitTtsStatus(') && app.includes('setTimeout(tick, 500)') && app.includes('waitTtsStatus(clean, 15000)'));
 check('app 流式 30 秒超时', app.includes('setTimeout(() => ctl.abort(), 30000)') && app.includes('signal: ctl.signal'));
 check('app 流式失败等缓存再降级', app.includes('waitTtsStatus(streamText, 8000)') && app.includes('playMessageSegments(convId, msgId, streamText, auto, temp)'));
-check('app 单回合生图上限', app.includes('let turnGenCount = 0') && app.includes('turnGenCount++') && app.includes('本回合生图已达 6 张上限'));
+check('app 单回合生图上限', app.includes('let turnGenCount = 0') && app.includes('turnGenCount++') && app.includes('检测到多次生图请求'));
 check('server 用户文本剥离系统提示段', server.includes("String(body.text || '').replace") && server.includes('\\[系统要求：[\\s\\S]*?\\]'));
 check('server 自动朗读也预生成', server.includes('if (text) queuePreGen(text, auto)'));
 check('server TTS 请求日志', server.includes("[tts] /api/tts/stream") && server.includes("[tts] ttsStatus") && server.includes('[tts] /api/tts 耗时'));
 check('MCP 生图意图闸门', mcp.includes('只有用户明确要求出图') && mcp.includes('Word/PPT/PDF/Excel/文档/文件/表格/文本时禁止调用') && mcp.includes('粘贴的更新日志'));
+check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
+check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
+check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));
+check('style 确认弹窗样式', css.includes('.confirm-dialog') && css.includes('.confirm-box'));
 
 console.log('Comfy 链路验证: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

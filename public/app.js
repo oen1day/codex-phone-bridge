@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.36';
+  const APP_VERSION = '10.37';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -83,6 +83,7 @@
   let liveReplyId = null;
   let liveSeq = 0;
   let turnGenCount = 0; // 本回合 generate_image 调用计数（防误触堆积卡片）
+  let genConfirmApproved = false; // 用户确认过多次生图后本回合不再重复询问
   let turnStartLastMsgId = null;
   let quotedMsg = null;
   let autoSpeak = true;
@@ -1465,6 +1466,7 @@
 
     if (method === 'turn/started') {
       turnGenCount = 0; // 新回合重置生图计数
+      genConfirmApproved = false;
       state.turnId = params.turn && params.turn.id;
       state.running = true;
       turnStartLastMsgId = currentLastMsgId();
@@ -1576,7 +1578,17 @@
         turnGenCount++;
         const hasUnbound = [...comfyCards.values()].some(r => !r.bound);
         if (turnGenCount > 6) {
-          if (!hasUnbound) showToast('本回合生图已达 6 张上限，请新开消息继续', true);
+          if (!hasUnbound && !genConfirmApproved) {
+            showConfirmDialog('检测到多次生图请求（第 ' + turnGenCount + ' 次），是否确认继续生成？').then(ok => {
+              if (ok) {
+                genConfirmApproved = true;
+                startComfyProgress('tool-' + item.id);
+              } else {
+                showToast('已停止后续生图', true);
+                interrupt();
+              }
+            });
+          }
         } else if (!hasUnbound) {
           startComfyProgress('tool-' + item.id);
         }
@@ -1919,6 +1931,8 @@
         state.turnId = turn.id;
         state.running = true;
         turnGenCount = 0;
+        genConfirmApproved = false;
+        turnStartLastMsgId = currentLastMsgId(); // 回合前基线：新回复 id 与其不同才会自动朗读
         replySeen[turn.id] = false;
         setStatus('正在运行…');
         $('interruptBtn').classList.remove('hidden');
@@ -2119,6 +2133,22 @@
     setTimeout(() => {
       if (t.parentNode) t.parentNode.removeChild(t);
     }, 4000);
+  }
+
+  // 通用确认弹窗（Promise：确认 true / 取消 false）
+  function showConfirmDialog(message) {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.className = 'confirm-dialog';
+      overlay.innerHTML = '<div class="confirm-box"><div class="confirm-msg"></div>' +
+        '<div class="confirm-btns"><button class="btn primary small" id="confirmOk">确认</button>' +
+        '<button class="btn ghost small" id="confirmCancel">取消</button></div></div>';
+      overlay.querySelector('.confirm-msg').textContent = message;
+      const close = val => { overlay.remove(); resolve(val); };
+      overlay.querySelector('#confirmOk').addEventListener('click', () => close(true));
+      overlay.querySelector('#confirmCancel').addEventListener('click', () => close(false));
+      document.body.appendChild(overlay);
+    });
   }
 
   function addSystemLine(text) {
@@ -3302,28 +3332,55 @@
   // 自动朗读（自动点击）：只在“当前回合确实有新的 agent 回复”时触发一次。
   // 事件路径和轮询兜底都会调用，靠 autoSpokenMsgKey 去重，避免双触发/漏触发。
   function maybeAutoSpeak() {
-    if (!state.currentId) return false;
+    if (!state.currentId) {
+      console.log('[autoSpeak] 跳过: 无当前对话');
+      return false;
+    }
     if (!autoSpeak) {
       console.log('[autoSpeak] 自动朗读开关已关闭，跳过自动播放');
       return false;
     }
     const agents = messagesEl.querySelectorAll('.msg.agent');
     const last = agents[agents.length - 1];
-    if (!last) return false;
+    if (!last) {
+      console.log('[autoSpeak] 跳过: 没有 AI 消息');
+      return false;
+    }
     const msgId = last.dataset.msgId;
-    if (!msgId) return false;
-    if (String(msgId).indexOf('live-') === 0) return false; // 流式临时 id，等刷新后的真实 id
-    if (msgId === turnStartLastMsgId) return false; // 本轮没有新回复，不重读旧消息
+    if (!msgId) {
+      console.log('[autoSpeak] 跳过: 消息没有 id');
+      return false;
+    }
+    if (String(msgId).indexOf('live-') === 0) {
+      console.log('[autoSpeak] 跳过: 流式临时 id，等刷新后的真实 id');
+      return false; // 流式临时 id，等刷新后的真实 id
+    }
+    if (msgId === turnStartLastMsgId) {
+      console.log('[autoSpeak] 跳过: 本轮没有新回复（msgId 等于回合前基线）');
+      return false; // 本轮没有新回复，不重读旧消息
+    }
     const text = collectAgentText(last);
-    if (!text.trim()) return false;
+    if (!text.trim()) {
+      console.log('[autoSpeak] 跳过: 无可朗读文字');
+      return false;
+    }
     const id = ttsKey(state.currentId, msgId);
-    if (id === autoSpokenMsgKey) return false; // 这条已自动朗读过，避免重复触发
+    if (id === autoSpokenMsgKey) {
+      console.log('[autoSpeak] 跳过: 这条已自动朗读过');
+      return false; // 这条已自动朗读过，避免重复触发
+    }
     // 自愈：空闲状态下清掉残留的归属键，避免误拦新消息
     if (ttsActiveKey && ttsActiveState === 'idle') ttsActiveKey = null;
     // 只拦“同一消息确实正在生成/播放中”的重复触发
-    if (ttsActiveKey === id && ttsActiveState !== 'idle') return false;
+    if (ttsActiveKey === id && ttsActiveState !== 'idle') {
+      console.log('[autoSpeak] 跳过: 同消息正在生成/播放中');
+      return false;
+    }
     const meta = getTtsMeta();
-    if (meta[id] && !meta[id].temp) return false; // 已完整播完过，手动重听即可
+    if (meta[id] && !meta[id].temp) {
+      console.log('[autoSpeak] 跳过: 已完整播完过');
+      return false; // 已完整播完过，手动重听即可
+    }
     autoSpokenMsgKey = id;
     speakMessage(state.currentId, msgId, text, true);
     return true;

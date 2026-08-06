@@ -398,6 +398,29 @@ a, .link-btn { color: var(--primary); text-decoration: underline; cursor: pointe
   border-color: var(--danger-dim);
   color: var(--danger);
 }
+.confirm-dialog {
+  position: fixed; left: 0; top: 0; right: 0; bottom: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.confirm-dialog .confirm-box {
+  width: 100%; max-width: 320px;
+  background: var(--surface);
+  border: 1px solid rgba(0, 210, 160, 0.25);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.confirm-dialog .confirm-msg {
+  font-size: 14px; line-height: 1.6;
+  color: var(--text);
+  margin-bottom: 16px;
+}
+.confirm-dialog .confirm-btns {
+  display: flex; gap: 10px; justify-content: flex-end;
+}
 
 /* ---------- 系统行 / 加载 ---------- */
 .comfy-generating {
