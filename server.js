@@ -156,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.47';
+const VERSION = '10.48';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -733,6 +733,13 @@ async function checkUpdate() {
 
 // ---------- 离线语音朗读（IndexTTS-2 本机服务） ----------
 let ttsChain = Promise.resolve();
+let ttsGate = Promise.resolve();
+// 全局 TTS 门锁：保证同一时刻只向语音服务(8866)发一个请求，避免 409 繁忙
+function ttsGateRun(fn) {
+  const p = ttsGate.then(fn, fn);
+  ttsGate = p.catch(() => {});
+  return p;
+}
 const ttsInflight = new Map();
 
 function ttsCacheKey(text) {
@@ -848,12 +855,12 @@ function splitTtsSegments(text) {
   return segs.filter(s => s.trim());
 }
 
-async function ttsSynthesizeOne(seg) {
+async function ttsSynthesizeOne(seg, attempt = 0) {
   const base = String(config.ttsUrl || 'http://127.0.0.1:8866').replace(/\/+$/, '');
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Number(config.ttsTimeoutMs) || 90000);
   try {
-    const r = await fetch(base + '/tts', {
+    const r = await ttsGateRun(() => fetch(base + '/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -863,11 +870,15 @@ async function ttsSynthesizeOne(seg) {
         use_random: false
       }),
       signal: ctrl.signal
-    });
+    }));
     if (!r.ok) {
       let detail = '';
       try { const j = await r.json(); detail = (j && j.detail) || ''; } catch (_) {}
-      if (r.status === 409) throw new Error('语音服务繁忙，请稍后重试');
+      if (r.status === 409) {
+      if (attempt >= 30) throw new Error('语音服务繁忙，请稍后重试');
+      await new Promise(res => setTimeout(res, 2000));
+      return ttsSynthesizeOne(seg, attempt + 1);
+    }
       if (r.status === 504) throw new Error('语音生成超时');
       throw new Error('语音服务返回 ' + r.status + (detail ? '：' + detail : ''));
     }
@@ -1159,11 +1170,11 @@ function cancelPreGen() {
   preGenQueue.length = 0; // 实时请求优先，清掉排队中的预生成
 }
 
-function readTtsStreamFrames(text, jobId, onFrame, onEnd) {
+function readTtsStreamFrames(text, jobId, onFrame, onEnd, attempt = 0) {
   const base = String(config.ttsUrl || 'http://127.0.0.1:8866').replace(/\/+$/, '');
   const ctrl = new AbortController();
   const task = (async () => {
-    const res = await fetch(base + '/tts/stream', {
+    const res = await ttsGateRun(() => fetch(base + '/tts/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1174,11 +1185,15 @@ function readTtsStreamFrames(text, jobId, onFrame, onEnd) {
         job_id: jobId || ''
       }),
       signal: ctrl.signal
-    });
+    }));
     if (!res.ok || !res.body) {
       let detail = '';
       try { const j = await res.json(); detail = (j && j.detail) || ''; } catch (_) {}
-      if (res.status === 409) throw new Error('语音服务繁忙，请稍后重试');
+      if (res.status === 409) {
+      if (attempt >= 30) throw new Error('语音服务繁忙，请稍后重试');
+      await new Promise(res => setTimeout(res, 2000));
+      return readTtsStreamFrames(text, jobId, onFrame, onEnd, attempt + 1);
+    }
       if (res.status === 504) throw new Error('语音生成超时');
       throw new Error('语音流服务返回 ' + res.status + (detail ? '：' + detail : ''));
     }

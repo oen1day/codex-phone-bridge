@@ -194,6 +194,10 @@ check('server inputTemp 先声明后使用', (() => { const d = server.indexOf('
 check('server 清理 ComfyUI output', server.includes('function cleanupComfyOutput(') && server.includes("n.startsWith('codex_')") && server.includes('setInterval(cleanupComfyOutput, 60 * 60 * 1000)'));
 check('MCP 洗图/超分选项', mcp.includes("'wash', 'upscale'") && mcp.includes('洗图') && mcp.includes('超分') && mcp.includes('必须传 imagePath'));
 check('app 询问词不预创建卡片', app.includes('询问/引用类表述不预创建卡片') && app.includes('什么|区别|怎么|为什么'));
+check('server TTS 全局门锁', server.includes('function ttsGateRun(') && server.includes('ttsGateRun(() => fetch'));
+check('server TTS 409 自动重试', server.includes('attempt >= 30') && server.includes('setTimeout(res, 2000)') && server.includes('r.status === 409'));
+check('app 发送时取消自动朗读补试', app.includes('clearTimeout(autoSpeakRetryTimer); // 取消待定的自动朗读补试') && app.includes('autoSpokenMsgKey = null; // 发送新消息后'));
+check('app 自动朗读跳过含生图消息', app.includes('最新消息含生图，等待图片完成') && app.includes('.agent-img img[data-comfy="1"]'));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));

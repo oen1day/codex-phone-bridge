@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.47';
+  const APP_VERSION = '10.48';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -1895,6 +1895,8 @@
       return;
     }
     stopSpeaking(); // 发送即停旧语音播放并取消旧合成
+    clearTimeout(autoSpeakRetryTimer); // 取消待定的自动朗读补试
+    autoSpokenMsgKey = null; // 发送新消息后，旧消息不再被自动朗读补试
     const text = inputBox.value.trim();
     const images = state.pendingImages.slice();
     const files = state.pendingFiles.slice();
@@ -3393,6 +3395,11 @@
     if (String(msgId).indexOf('live-') === 0) {
       console.log('[autoSpeak] 跳过: 流式临时 id，等刷新后的真实 id');
       return false; // 流式临时 id，等刷新后的真实 id
+    }
+    // 最新消息含生图（comfy 图片）时先不自动朗读，让生图先行；纯文字消息按顺序朗读
+    if (last.querySelector && last.querySelector('.agent-img img[data-comfy="1"]')) {
+      console.log('[autoSpeak] 跳过: 最新消息含生图，等待图片完成');
+      return false;
     }
     if (msgId === turnStartLastMsgId) {
       console.log('[autoSpeak] 跳过: 本轮没有新回复（msgId 等于回合前基线）');
