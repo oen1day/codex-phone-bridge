@@ -202,6 +202,7 @@ check('server 朗读与本地生图串行调度', server.includes('localGenBusy'
 check('server TTS 等待本地生图', server.includes('ttsGate.then(async () => { await waitLocalGenFree(); return fn(); }'));
 check('app 整轮生图期间延迟朗读', app.includes('liveGenRunning') && app.includes('本回合生图进行中，等生图完成再朗读'));
 check('app 手动朗读生图时排队', app.includes('pendingManualSpeak') && app.includes('生图进行中，稍后朗读') && app.includes('function maybePlayPendingManualSpeak('));
+check('app 保存图片优先本地缓存', app.includes('function comfyLocalPath(') && app.includes('优先使用手机本地缓存') && app.includes('const local = comfyLocalPath(url)') && app.includes("'file://' + String(p).replace(/\\\\/g, '/')"));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));

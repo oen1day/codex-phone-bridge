@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.49';
+  const APP_VERSION = '10.50';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -965,6 +965,11 @@
   // 仅用户点击“保存到相册”时写入系统相册（不再自动保存）
   function saveImageToDevice(src) {
     let url = src;
+    // 优先使用手机本地缓存：图已缓存到 App 私有目录就直接从本地存相册，不依赖可能已被删除的电脑副本
+    if (window.AndroidBridge && window.AndroidBridge.saveImageToGallery) {
+      const local = comfyLocalPath(url);
+      if (local) url = local;
+    }
     if (url && url.indexOf('/') === 0 && url.indexOf('//') !== 0 && !/^data:/.test(url)) {
       try { url = location.origin + url; } catch (_) {}
     }
@@ -991,6 +996,17 @@
       showToast('保存失败: ' + (e && e.message), true);
       return false;
     }
+  }
+
+  // 从 comfyImgCache 取本地缓存路径（file://），没有缓存返回 null
+  function comfyLocalPath(src) {
+    if (!src || /^data:/i.test(String(src))) return null;
+    const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(String(src));
+    if (!m) return null;
+    const map = loadComfyImgCache();
+    const p = map[m[1]];
+    if (!p) return null;
+    return 'file://' + String(p).replace(/\\/g, '/');
   }
 
   // 下载 AI 生成/修改的文件：手机走原生保存到 App 下载目录，电脑网页走 <a download>

@@ -10,15 +10,15 @@
     "class_type": "SeedVR2",
     "inputs": {
       "images": [
-        41,
+        "41",
         0
       ],
       "block_swap_config": [
-        60,
+        "60",
         0
       ],
       "extra_args": [
-        61,
+        "61",
         0
       ],
       "model": "seedvr2_ema_7b_sharp_fp16.safetensors",
@@ -53,7 +53,7 @@
     "class_type": "SaveImage",
     "inputs": {
       "images": [
-        59,
+        "59",
         0
       ],
       "filename_prefix": "codex_upscale"

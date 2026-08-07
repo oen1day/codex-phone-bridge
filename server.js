@@ -156,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.49';
+const VERSION = '10.50';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
