@@ -212,6 +212,7 @@ check('Java 设置表单可滚动+联动关闭', java.includes('new android.widg
 check('中继分片重组超时自适应', relay.includes('Math.min(120000, 10000 + Math.ceil(entry.total / 20) * 10000)'));
 check('中继分片缺失补拉', relay.includes("type === 'relay-resend'") && relay.includes('_handleResend(req)') && relay.includes('_maybeResend(entry, env.c)'));
 check('中继发送端保留分片供补拉', relay.includes('_sentChunks') && relay.includes('rec.timer = setTimeout'));
+check('中继图片渲染后主动取图', app.includes('block.querySelectorAll(\'.agent-img img[data-comfy="1"]\')') && app.includes('setTimeout(function () { resolveComfyImg(im); }, 120)'));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));

@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.53';
+  const APP_VERSION = '10.54';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -923,6 +923,12 @@
       block.classList.add('agent-text');
       if (d.typing) block.classList.add('typing'); else block.classList.remove('typing');
       block.innerHTML = renderAgentTextWithImages(d.text || '');
+      block.querySelectorAll('.agent-img img[data-comfy="1"]').forEach(function (im) {
+        var s = String(im.getAttribute('src') || '');
+        if (s.indexOf('/') === 0 && s.indexOf('//') !== 0) {
+          setTimeout(function () { resolveComfyImg(im); }, 120);
+        }
+      });
     } else if (d.kind === 'cmd') {
       block.className = 'block cmd';
       block.innerHTML = '<div class="cmd-line">🔧 ' + escapeHtml(d.label || '正在执行电脑命令…') +
