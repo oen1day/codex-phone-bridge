@@ -1,0 +1,62 @@
+{
+  "41": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "云海天宫2.png",
+      "upload": "image"
+    }
+  },
+  "59": {
+    "class_type": "SeedVR2",
+    "inputs": {
+      "images": [
+        41,
+        0
+      ],
+      "block_swap_config": [
+        60,
+        0
+      ],
+      "extra_args": [
+        61,
+        0
+      ],
+      "model": "seedvr2_ema_7b_sharp_fp16.safetensors",
+      "seed": 1373526917,
+      "new_resolution": 3056,
+      "batch_size": 5,
+      "color_correction": "wavelet",
+      "input_noise_scale": 0,
+      "latent_noise_scale": 0
+    }
+  },
+  "60": {
+    "class_type": "SeedVR2BlockSwap",
+    "inputs": {
+      "blocks_to_swap": 16,
+      "offload_io_components": false
+    }
+  },
+  "61": {
+    "class_type": "SeedVR2ExtraArgs",
+    "inputs": {
+      "tiled_vae": true,
+      "vae_tile_size": 512,
+      "vae_tile_overlap": 64,
+      "preserve_vram": false,
+      "cache_model": false,
+      "enable_debug": false,
+      "device": "cuda:0"
+    }
+  },
+  "999": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        59,
+        0
+      ],
+      "filename_prefix": "codex_upscale"
+    }
+  }
+}

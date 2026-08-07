@@ -156,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.46';
+const VERSION = '10.47';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1305,7 +1305,9 @@ let phoneCapsCache = loadPhoneCaps();
 const COMFY_WORKFLOWS = {
   zimage: 'zimage_direct_api.json',
   zimage_upscale: 'zimage_upscale_api.json',
-  gptimage2: 'gptimage2_api.json'
+  gptimage2: 'gptimage2_api.json',
+  wash: 'flux2_wash_api.json',
+  upscale: 'flux2_upscale_api.json'
 };
 
 const COMFY_FIREBASE_API_KEY = 'AIzaSyC2-fomLqgCjb7ELwta1I9cEarPK8ziTGs';
@@ -1475,7 +1477,8 @@ async function comfyGenerate(params) {
     return await openaiGenerate(params);
   }
   const prompt = String(params.prompt || '').trim();
-  if (!prompt) throw new BusinessError('缺少提示词 prompt');
+  const noPromptOk = workflow === 'wash' || workflow === 'upscale';
+  if (!prompt && !noPromptOk) throw new BusinessError('缺少提示词 prompt');
   const wfDir = config.comfyWorkflows || path.join(ROOT, 'comfy-workflows');
   const wfPath = path.join(wfDir, file);
   if (!fs.existsSync(wfPath)) throw new BusinessError('未找到工作流文件: ' + file);
@@ -1485,6 +1488,8 @@ async function comfyGenerate(params) {
   if (workflow === 'gptimage2') {
     graph['300'].inputs.prompt = prompt;
     if (params.seed != null) graph['300'].inputs.seed = Number(params.seed);
+  } else if (workflow === 'wash' || workflow === 'upscale') {
+    if (workflow === 'wash' && prompt && graph['37']) graph['37'].inputs.text = prompt;
   } else {
     graph['27'].inputs.text = prompt;
     if (params.width != null) graph['13'].inputs.width = Number(params.width);
@@ -1492,6 +1497,7 @@ async function comfyGenerate(params) {
     if (params.seed != null) graph['3'].inputs.seed = Number(params.seed);
   }
 
+  let inputTemp = null; // 复制到 ComfyUI input 的临时图片，生成完成后删除
   const imageSrc = params.imagePath || params.image;
   if (workflow === 'gptimage2') {
     if (imageSrc) {
@@ -1518,11 +1524,24 @@ async function comfyGenerate(params) {
       if (!buf) throw new BusinessError('无法读取图片: ' + String(imageSrc).slice(0, 80));
       const fname = 'comfy_' + crypto.randomBytes(6).toString('hex') + ext;
       fs.writeFileSync(path.join(inputDir, fname), buf);
+      inputTemp = { dir: inputDir, name: fname };
       graph['299'].inputs.image = fname;
     } else {
       // 无图：纯文生图模式——移除 LoadImage 节点并清空 image 输入
       delete graph['299'];
       delete graph['300'].inputs.image;
+    }
+  } else if (workflow === 'wash' || workflow === 'upscale') {
+    if (!imageSrc) throw new BusinessError('洗图/超分需要指定要处理的图片 imagePath');
+    const inputDir = findComfyInputDir();
+    if (!inputDir) throw new BusinessError('找不到 ComfyUI input 目录，请在 config.json 配置 comfyInputDir');
+    const img = readImageFile(imageSrc);
+    if (!img) throw new BusinessError('无法读取图片: ' + String(imageSrc).slice(0, 80));
+    const fname = 'comfy_' + crypto.randomBytes(6).toString('hex') + img.ext;
+    fs.writeFileSync(path.join(inputDir, fname), img.buf);
+    inputTemp = { dir: inputDir, name: fname };
+    for (const node of Object.values(graph)) {
+      if (node.class_type === 'LoadImage') node.inputs.image = fname;
     }
   }
 
@@ -1621,7 +1640,27 @@ async function comfyGenerate(params) {
   const ext = /\.png$/i.test(resultImg.filename) ? '.png' : '.jpg';
   const outFile = path.join(UPLOAD_DIR, 'comfy-' + id + ext);
   fs.writeFileSync(outFile, imgBuf);
+  if (inputTemp) {
+    try { fs.unlinkSync(path.join(inputTemp.dir, inputTemp.name)); } catch (_) {}
+  }
   return { ok: true, path: outFile, url: '/uploads/comfy-' + id + ext, workflow, promptId };
+}
+
+// 清理 ComfyUI output 目录下 codex_* 输出副本，保留最近 20 个，避免堆积
+function cleanupComfyOutput() {
+  try {
+    const inputDir = findComfyInputDir();
+    if (!inputDir) return;
+    const outputDir = path.join(path.dirname(inputDir), 'output');
+    if (!fs.existsSync(outputDir)) return;
+    const files = fs.readdirSync(outputDir)
+      .filter(n => n.startsWith('codex_') && /\.(png|jpe?g|webp)$/i.test(n))
+      .map(n => ({ n, t: fs.statSync(path.join(outputDir, n)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    for (let i = 20; i < files.length; i++) {
+      try { fs.unlinkSync(path.join(outputDir, files[i].n)); } catch (_) {}
+    }
+  } catch (_) {}
 }
 
 // 只允许访问 uploads/ 下 comfy-* 开头的文件，防止路径穿越
@@ -1672,6 +1711,8 @@ function cleanupComfyImages() {
 }
 cleanupComfyImages();
 setInterval(cleanupComfyImages, 60 * 60 * 1000);
+cleanupComfyOutput();
+setInterval(cleanupComfyOutput, 60 * 60 * 1000);
 
 // 发布文件数量上限：uploads/pub-* 最多保留 max 个，超出按修改时间删最旧（不影响 comfy-*/upload-*/工作区）
 function prunePubFiles(max) {

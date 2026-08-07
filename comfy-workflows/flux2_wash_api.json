@@ -1,0 +1,187 @@
+{
+  "25": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        32,
+        0
+      ],
+      "guider": [
+        31,
+        0
+      ],
+      "sampler": [
+        30,
+        0
+      ],
+      "sigmas": [
+        26,
+        0
+      ],
+      "latent_image": [
+        27,
+        0
+      ]
+    }
+  },
+  "26": {
+    "class_type": "Flux2Scheduler",
+    "inputs": {
+      "steps": 4,
+      "width": 1024,
+      "height": 1024
+    }
+  },
+  "27": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "30": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "31": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "model": [
+        34,
+        0
+      ],
+      "positive": [
+        45,
+        0
+      ],
+      "negative": [
+        38,
+        0
+      ],
+      "cfg": 1
+    }
+  },
+  "32": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 6969
+    }
+  },
+  "33": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        25,
+        0
+      ],
+      "vae": [
+        36,
+        0
+      ]
+    }
+  },
+  "34": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "Flux2-Klein-9B-True-v2-bf16.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "35": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "type": "flux2",
+      "device": "default"
+    }
+  },
+  "36": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "37": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        35,
+        0
+      ],
+      "text": "(保持原有的背景光影色调:1.5)，边缘利落，细节精致可控，层次分明，材质高级，质感细腻，画面整洁，不杂乱，不脏污，高清高画质，精修级商业海报质感。不要脏污覆盖感，不要过度分割分块，不要过量颗粒，不要杂乱细节，不要画面发灰，不要低质纹理，不要糊脸，不要脏旧滤镜，不要乱线条，不要过度磨损，不要脏兮兮的表面质感。"
+    }
+  },
+  "38": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        37,
+        0
+      ]
+    }
+  },
+  "41": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "云海天宫2.png",
+      "upload": "image"
+    }
+  },
+  "42": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        49,
+        0
+      ],
+      "vae": [
+        36,
+        0
+      ]
+    }
+  },
+  "45": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        37,
+        0
+      ],
+      "latent": [
+        42,
+        0
+      ]
+    }
+  },
+  "49": {
+    "class_type": "LayerUtility: ImageScaleByAspectRatio V2",
+    "inputs": {
+      "image": [
+        41,
+        0
+      ],
+      "aspect_ratio": "original",
+      "proportional_width": 1,
+      "proportional_height": 1,
+      "fit": "letterbox",
+      "method": "lanczos",
+      "round_to_multiple": "8",
+      "scale_to_side": "None",
+      "scale_to_length": 1024,
+      "background_color": "#000000"
+    }
+  },
+  "999": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        33,
+        0
+      ],
+      "filename_prefix": "codex_wash"
+    }
+  }
+}

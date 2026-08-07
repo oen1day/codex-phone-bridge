@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.46';
+  const APP_VERSION = '10.47';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -2309,6 +2309,10 @@
   // 命中且 >=2 才预创建；无法确定时返回 0 走原逻辑。
   function parseImageCount(text) {
     const s = String(text || '');
+    // 询问/引用类表述不预创建卡片（如“这两张图片有什么区别”“这张图怎么样”）；带生成意图词时仍正常预创建
+    const questionRef = /(什么|区别|怎么|为什么|问题|检查|看看|描述|解释|哪个|这张|刚才|上面)/;
+    const genVerb = /(生成|画|出图|出张|做|给我|来|要|创建|制作)/;
+    if (questionRef.test(s) && !genVerb.test(s)) return 0;
     // 1) 显式数量
     const m = s.match(/(\d+|两|二|三|四|五|六|七|八|九|十|十一|十二|十三|十四|十五|十六|十七|十八|十九|二十)\s*(张|个|种|版|套)/);
     if (m && /图|图片|版本|对比|一起|放一起|壁纸|插画|封面|照片|分镜|效果/.test(s)) {

@@ -66,11 +66,11 @@ const TOOLS = [
   },
   {
     name: 'generate_image',
-    description: '在电脑端 ComfyUI 生成或编辑图片。只有用户明确要求出图（图片/图/画/壁纸/照片/海报/头像/表情包等字样，且对象是视觉画面）时才调用本工具。用户提到 Word/PPT/PDF/Excel/文档/文件/表格/文本时禁止调用（应使用 publish_file 发布文件）；粘贴的更新日志、系统要求、含“生成”字样但不指向图片的文本一律不视为出图指令。workflow 取值：gptimage2（默认优先，走云端不吃本地电脑性能，可生成可编辑）、zimage（本地 ComfyUI z-image，本地推理会占用电脑性能）、zimage_upscale（本地 z-image + 超分）。除非用户明确要求使用本地 z-image 生成，否则一律使用 gptimage2（不传 workflow 或传 gptimage2）。prompt 必填，中文描述即可。imagePath 可选：用户上传了图片且要用 gptimage2 编辑时传图片的本机路径或 /uploads/ 路径；不传 imagePath 时 gptimage2 自动走纯文生图模式。生成完成返回图片地址，展示成品图时使用固定模板：先写一行图片描述文字，再换行用 [描述](返回的url) 形式展示（禁止使用 ![描述](url) 感叹号语法，避免前端残留感叹号）。需要在手机设置里开启“图像生成”能力。',
+    description: '在电脑端 ComfyUI 生成或编辑图片。只有用户明确要求出图（图片/图/画/壁纸/照片/海报/头像/表情包等字样，且对象是视觉画面）时才调用本工具。用户提到 Word/PPT/PDF/Excel/文档/文件/表格/文本时禁止调用（应使用 publish_file 发布文件）；粘贴的更新日志、系统要求、含“生成”字样但不指向图片的文本一律不视为出图指令。workflow 取值：gptimage2（默认优先，走云端不吃本地电脑性能，可生成可编辑）、zimage（本地 ComfyUI z-image，本地推理会占用电脑性能）、zimage_upscale（本地 z-image + 超分）、wash（洗图：把指定图片重新清洗去噪，只洗图不放大，必须传 imagePath）、upscale（超分：把指定图片放大，只放大不洗图，必须传 imagePath）。用户说“洗图”时使用 wash，并在展示描述末尾追加“｜洗图”；用户说“超分/放大”时使用 upscale，并追加“｜超分”；普通生成一律使用 gptimage2（不传 workflow 或传 gptimage2），且不做洗图/超分。除非用户明确要求使用本地 z-image 生成，否则不使用 zimage。prompt 必填，中文描述即可（wash/upscale 可不传 prompt，使用工作流默认）。imagePath 可选：用户上传了图片且要处理/编辑时传图片的本机路径或 /uploads/ 路径；不传 imagePath 时 gptimage2 自动走纯文生图模式，wash/upscale 必须传。生成完成返回图片地址，展示成品图时使用固定模板：先写一行图片描述文字，再换行用 [描述](返回的url) 形式展示（禁止使用 ![描述](url) 感叹号语法，避免前端残留感叹号）。需要在手机设置里开启“图像生成”能力。',
     inputSchema: {
       type: 'object',
       properties: {
-        workflow: { type: 'string', enum: ['zimage', 'zimage_upscale', 'gptimage2'], description: '工作流' },
+        workflow: { type: 'string', enum: ['zimage', 'zimage_upscale', 'gptimage2', 'wash', 'upscale'], description: '工作流：gptimage2 默认生成；wash 洗图；upscale 超分' },
         prompt: { type: 'string', description: '生成/编辑要求（中文即可）' },
         imagePath: { type: 'string', description: '要编辑的图片路径（本机路径或 /uploads/ 路径），仅 gptimage2 编辑模式需要' },
         upscale: { type: 'boolean', description: '仅当 workflow=zimage 且为 true 时走本地超分版（等价 zimage_upscale）' },
@@ -185,7 +185,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '10.46' }
+        serverInfo: { name: 'codex-phone-bridge', version: '10.47' }
       }
     });
     return;

@@ -187,6 +187,13 @@ check('MCP 生图展示模板固定', mcp.includes('[描述](返回的url)') && 
 check('server 一键配置下发通道与能力', server.includes("imageProvider: config.imageProvider || 'comfy'") && server.includes('device_status: !!') && server.includes('image_generation: !!'));
 check('Java applyConfig 恢复能力开关', java.includes('public void applyConfig(String json)') && java.includes('KEY_CAP_DEVICE_STATUS') && java.includes('KEY_CAP_IMAGE_GEN'));
 check('app 一键配置恢复能力开关', app.includes('window.AndroidBridge.applyConfig') && app.includes('cfg.caps'));
+check('server 洗图/超分工作流映射', server.includes("wash: 'flux2_wash_api.json'") && server.includes("upscale: 'flux2_upscale_api.json'"));
+check('洗图/超分工作流文件存在', fs.existsSync(path.join(root, 'comfy-workflows/flux2_wash_api.json')) && fs.existsSync(path.join(root, 'comfy-workflows/flux2_upscale_api.json')) && fs.existsSync(path.join(root, 'comfy-workflows/flux2_wash_upscale_backup.json')));
+check('工作流 SaveImage 前缀 codex_', read('comfy-workflows/flux2_wash_api.json').includes('codex_wash') && read('comfy-workflows/flux2_upscale_api.json').includes('codex_upscale'));
+check('server inputTemp 先声明后使用', (() => { const d = server.indexOf('let inputTemp = null;'); return d >= 0 && d < server.indexOf('inputTemp = { dir: inputDir'); })());
+check('server 清理 ComfyUI output', server.includes('function cleanupComfyOutput(') && server.includes("n.startsWith('codex_')") && server.includes('setInterval(cleanupComfyOutput, 60 * 60 * 1000)'));
+check('MCP 洗图/超分选项', mcp.includes("'wash', 'upscale'") && mcp.includes('洗图') && mcp.includes('超分') && mcp.includes('必须传 imagePath'));
+check('app 询问词不预创建卡片', app.includes('询问/引用类表述不预创建卡片') && app.includes('什么|区别|怎么|为什么'));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));
