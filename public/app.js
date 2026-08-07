@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.45';
+  const APP_VERSION = '10.46';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -3604,6 +3604,10 @@
         showToast('配置成功，正在连接…');
       } else {
         showToast('配置成功：配对码=' + cfg.room + ' 密码=' + cfg.password);
+      }
+      // 一键配置恢复能力开关（新手机免手动配置）：imageProvider 由电脑端下发，能力开关由 applyConfig 写入
+      if (window.AndroidBridge && window.AndroidBridge.applyConfig && cfg.caps) {
+        window.AndroidBridge.applyConfig(JSON.stringify(cfg.caps));
       }
     } catch (e) {
       showToast('一键配置失败: ' + e.message, true);

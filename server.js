@@ -156,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.45';
+const VERSION = '10.46';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -622,7 +622,12 @@ async function onBootstrapMessage(msg, ch) {
       room: config.relayRoomCode,
       password: config.password,
       updateUrl: config.updateUrl || '',
-      broker: config.relayBroker || 'wss://broker.emqx.io:8084/mqtt'
+      broker: config.relayBroker || 'wss://broker.emqx.io:8084/mqtt',
+      imageProvider: config.imageProvider || 'comfy',
+      caps: {
+        device_status: !!(phoneCapsCache && phoneCapsCache.device_status),
+        image_generation: !!(phoneCapsCache && phoneCapsCache.image_generation)
+      }
     });
     const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, iv);
     const enc = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);

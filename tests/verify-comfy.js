@@ -183,6 +183,10 @@ check('server 用户文本剥离系统提示段', server.includes("String(body.t
 check('server 自动朗读也预生成', server.includes('if (text) queuePreGen(text, auto)'));
 check('server TTS 请求日志', server.includes("[tts] /api/tts/stream") && server.includes("[tts] ttsStatus") && server.includes('[tts] /api/tts 耗时'));
 check('MCP 生图意图闸门', mcp.includes('只有用户明确要求出图') && mcp.includes('Word/PPT/PDF/Excel/文档/文件/表格/文本时禁止调用') && mcp.includes('粘贴的更新日志'));
+check('MCP 生图展示模板固定', mcp.includes('[描述](返回的url)') && mcp.includes('禁止使用 ![描述](url)'));
+check('server 一键配置下发通道与能力', server.includes("imageProvider: config.imageProvider || 'comfy'") && server.includes('device_status: !!') && server.includes('image_generation: !!'));
+check('Java applyConfig 恢复能力开关', java.includes('public void applyConfig(String json)') && java.includes('KEY_CAP_DEVICE_STATUS') && java.includes('KEY_CAP_IMAGE_GEN'));
+check('app 一键配置恢复能力开关', app.includes('window.AndroidBridge.applyConfig') && app.includes('cfg.caps'));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));

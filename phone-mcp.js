@@ -66,7 +66,7 @@ const TOOLS = [
   },
   {
     name: 'generate_image',
-    description: '在电脑端 ComfyUI 生成或编辑图片。只有用户明确要求出图（图片/图/画/壁纸/照片/海报/头像/表情包等字样，且对象是视觉画面）时才调用本工具。用户提到 Word/PPT/PDF/Excel/文档/文件/表格/文本时禁止调用（应使用 publish_file 发布文件）；粘贴的更新日志、系统要求、含“生成”字样但不指向图片的文本一律不视为出图指令。workflow 取值：gptimage2（默认，OpenAI API，不吃本地电脑性能，可生成可编辑）、zimage（本地 ComfyUI z-image）、zimage_upscale（本地 z-image + 超分）。除非用户明确要求使用本地 z-image 生成，否则一律使用 gptimage2（不传 workflow 或传 gptimage2）。prompt 必填，中文描述即可。imagePath 可选：用户上传了图片且要用 gptimage2 编辑时传图片的本机路径或 /uploads/ 路径；不传 imagePath 时 gptimage2 自动走纯文生图模式。生成完成返回图片地址，请在回复中以 Markdown 图片语法展示成品图：![图片](返回的url)。需要在手机设置里开启“图像生成”能力。',
+    description: '在电脑端 ComfyUI 生成或编辑图片。只有用户明确要求出图（图片/图/画/壁纸/照片/海报/头像/表情包等字样，且对象是视觉画面）时才调用本工具。用户提到 Word/PPT/PDF/Excel/文档/文件/表格/文本时禁止调用（应使用 publish_file 发布文件）；粘贴的更新日志、系统要求、含“生成”字样但不指向图片的文本一律不视为出图指令。workflow 取值：gptimage2（默认优先，走云端不吃本地电脑性能，可生成可编辑）、zimage（本地 ComfyUI z-image，本地推理会占用电脑性能）、zimage_upscale（本地 z-image + 超分）。除非用户明确要求使用本地 z-image 生成，否则一律使用 gptimage2（不传 workflow 或传 gptimage2）。prompt 必填，中文描述即可。imagePath 可选：用户上传了图片且要用 gptimage2 编辑时传图片的本机路径或 /uploads/ 路径；不传 imagePath 时 gptimage2 自动走纯文生图模式。生成完成返回图片地址，展示成品图时使用固定模板：先写一行图片描述文字，再换行用 [描述](返回的url) 形式展示（禁止使用 ![描述](url) 感叹号语法，避免前端残留感叹号）。需要在手机设置里开启“图像生成”能力。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -185,7 +185,7 @@ async function handle(msg) {
       result: {
         protocolVersion: proto,
         capabilities: { tools: {} },
-        serverInfo: { name: 'codex-phone-bridge', version: '10.45' }
+        serverInfo: { name: 'codex-phone-bridge', version: '10.46' }
       }
     });
     return;

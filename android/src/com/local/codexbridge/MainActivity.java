@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.45";
+    private static final String APP_VERSION = "10.46";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -189,6 +189,18 @@ public class MainActivity extends Activity {
                 o.put("image_generation", p.getBoolean(KEY_CAP_IMAGE_GEN, false));
             } catch (Exception ignored) {}
             return o.toString();
+        }
+
+        // 一键配置恢复能力开关：新手机输入 shareKey 后自动恢复上次手机的能力设置
+        @JavascriptInterface
+        public void applyConfig(String json) {
+            try {
+                JSONObject o = new JSONObject(String.valueOf(json));
+                SharedPreferences.Editor e = getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
+                if (o.has("device_status")) e.putBoolean(KEY_CAP_DEVICE_STATUS, o.optBoolean("device_status"));
+                if (o.has("image_generation")) e.putBoolean(KEY_CAP_IMAGE_GEN, o.optBoolean("image_generation"));
+                e.apply();
+            } catch (Exception ignored) {}
         }
 
         // 设备状态查询（设置里默认关闭）
