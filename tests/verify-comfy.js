@@ -74,6 +74,7 @@ check('Java 有 App 内缓存方法', java.includes('cacheImageToApp') && java.i
 check('Manifest 有低版本存储权限', read('android/AndroidManifest.xml').includes('WRITE_EXTERNAL_STORAGE'));
 const css = read('public/style.css');
 const html = read('public/index.html');
+const relay = read('public/relay.js');
 check('占位卡固定高度 180px', app.includes('width="320" height="200"') && css.includes('height: 180px'));
 check('卡片内联样式兜底', app.includes('min-height:180px;') && app.includes("ph.style.cssText"));
 check('图片描述标签替代感叹号', app.includes('agent-img-tag') && app.includes("replace(/^!/, '')"));
@@ -208,6 +209,9 @@ check('app 生成语音服务总开关', app.includes('let ttsEnabled = true') &
 check('app 语音关闭时按钮隐藏与手动拦截', app.includes('!hasText || !ttsEnabled') && app.includes('语音服务已关闭，请在设置里开启'));
 check('Java 生成语音服务开关', java.includes('KEY_TTS_ENABLED') && java.includes('public boolean getTtsEnabled()') && java.includes('生成语音服务（关闭后所有语音都不生成，自动朗读一起关）'));
 check('Java 设置表单可滚动+联动关闭', java.includes('new android.widget.ScrollView(this)') && java.includes('if (!ttsEnabled) autoSpeak = false;') && java.includes('autoSpeakBox.setChecked(false)'));
+check('中继分片重组超时自适应', relay.includes('Math.min(120000, 10000 + Math.ceil(entry.total / 20) * 10000)'));
+check('中继分片缺失补拉', relay.includes("type === 'relay-resend'") && relay.includes('_handleResend(req)') && relay.includes('_maybeResend(entry, env.c)'));
+check('中继发送端保留分片供补拉', relay.includes('_sentChunks') && relay.includes('rec.timer = setTimeout'));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));

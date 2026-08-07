@@ -182,6 +182,7 @@
       this.ready = false;
       this.clientId = opts.clientId || ('cb_' + randId());
       this.chunks = {};
+      this._sentChunks = {}; // 已发送的大消息分片缓存，供接收端补拉（QoS 0 可能丢片）
       this.closed = false;
       this._retryTimer = null;
       this.pingTimer = null;
@@ -314,6 +315,10 @@
           return;
         }
         const obj = await decryptJson(this.key, env);
+        if (obj && obj.type === 'relay-resend') {
+          this._handleResend(obj);
+          return;
+        }
         this.onMessage(obj);
       } catch (e) {
         this._reportError((e && e.message) || '消息解密失败');
@@ -332,16 +337,20 @@
     _addChunk(env) {
       const entry = this.chunks[env.c] || { total: env.t, parts: [], count: 0 };
       if (!entry.timer) {
-        // 分片重组超时：公共 MQTT 是 QoS 0，可能丢块，不能永远等
+        // 分片重组超时按片数自适应：每 20 片加 10 秒，上限 120 秒（大片数在公共 MQTT 上需要更久收齐）
         entry.timer = setTimeout(() => {
           if (this.chunks[env.c] === entry) delete this.chunks[env.c];
           if (this.onChunkError) {
             try { this.onChunkError('中继消息分片不完整，已丢弃'); } catch (_) {}
           }
-        }, 10000);
+        }, Math.min(120000, 10000 + Math.ceil(entry.total / 20) * 10000));
+        entry.firstAt = Date.now();
+        entry.lastReq = 0;
       }
-      entry.parts[env.i] = b64ToBytes(env.b);
-      entry.count++;
+      if (entry.parts[env.i] == null) {
+        entry.parts[env.i] = b64ToBytes(env.b);
+        entry.count++;
+      }
       this.chunks[env.c] = entry;
       if (entry.count >= entry.total) {
         delete this.chunks[env.c];
@@ -356,6 +365,35 @@
           const env2 = JSON.parse(text);
           decryptJson(this.key, env2).then(obj => this.onMessage(obj)).catch(() => {});
         } catch (_) {}
+      } else {
+        this._maybeResend(entry, env.c);
+      }
+    }
+
+    // QoS 0 丢片补拉：接收端发现缺片时，请求发送端重发缺失片（限频 3 秒一次）
+    _maybeResend(entry, id) {
+      const now = Date.now();
+      if (now - entry.firstAt < 3000) return; // 先等自然到达
+      if (now - entry.lastReq < 3000) return;
+      entry.lastReq = now;
+      const missing = [];
+      for (let i = 0; i < entry.total; i++) {
+        if (!entry.parts[i]) missing.push(i);
+      }
+      if (!missing.length) return;
+      this.send({ type: 'relay-resend', id, missing }).catch(() => {});
+    }
+
+    // 收到补拉请求：重发缺失分片
+    _handleResend(req) {
+      const rec = this._sentChunks[req && req.id];
+      if (!rec || !rec.parts) return;
+      const missing = Array.isArray(req.missing) ? req.missing : [];
+      for (const i of missing) {
+        const part = rec.parts[i];
+        if (!part) continue;
+        const chunk = JSON.stringify({ c: req.id, t: rec.parts.length, i, b: b64(part) });
+        this.ws.send(buildPublish(this.outTopic, encoder.encode(chunk)));
       }
     }
 
@@ -371,11 +409,19 @@
       }
       const id = randId();
       const total = Math.ceil(bytes.length / CHUNK_SIZE);
+      const parts = [];
       for (let i = 0; i < total; i++) {
         const part = bytes.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        parts.push(part);
         const chunk = JSON.stringify({ c: id, t: total, i, b: b64(part) });
         this.ws.send(buildPublish(this.outTopic, encoder.encode(chunk)));
       }
+      // 保留已发分片 120 秒，供接收端补拉
+      const rec = { parts, timer: null };
+      this._sentChunks[id] = rec;
+      rec.timer = setTimeout(() => {
+        if (this._sentChunks[id] === rec) delete this._sentChunks[id];
+      }, 120000);
     }
 
     stop() {
@@ -385,6 +431,11 @@
         if (entry && entry.timer) clearTimeout(entry.timer);
       }
       this.chunks = {};
+      for (const c of Object.keys(this._sentChunks)) {
+        const rec = this._sentChunks[c];
+        if (rec && rec.timer) clearTimeout(rec.timer);
+      }
+      this._sentChunks = {};
       if (this._retryTimer) {
         clearTimeout(this._retryTimer);
         this._retryTimer = null;
