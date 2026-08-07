@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.50';
+  const APP_VERSION = '10.51';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -88,6 +88,8 @@
   let quotedMsg = null;
   let autoSpeak = true;
   autoSpeak = readAutoSpeakPref();
+  let ttsEnabled = true;
+  ttsEnabled = readTtsEnabledPref();
   const speakButtons = new Map();
   const ttsMem = new Map();
   const ttsGenerating = new Map();
@@ -2613,6 +2615,25 @@
     return true;
   }
 
+  // 生成语音服务总开关：关闭时所有语音都不生成、自动朗读一起关
+  function readTtsEnabledPref() {
+    try {
+      if (window.AndroidBridge && window.AndroidBridge.getTtsEnabled) {
+        const s = String(window.AndroidBridge.getTtsEnabled());
+        return s !== 'false' && s !== '0';
+      }
+    } catch (_) {}
+    return true;
+  }
+
+  // 从原生设置刷新语音开关（设置页返回后立即生效），并同步朗读按钮显隐
+  function refreshTtsPrefs() {
+    ttsEnabled = readTtsEnabledPref();
+    autoSpeak = readAutoSpeakPref();
+    if (!ttsEnabled) autoSpeak = false;
+    for (const el of messagesEl.querySelectorAll('.msg.agent')) updateSpeakBtnVisibility(el);
+  }
+
   function ttsKey(convId, msgId) { return String(convId) + '_' + String(msgId); }
   function sanitizeTtsId(s) { return String(s || '').replace(/[^A-Za-z0-9_-]/g, '_'); }
 
@@ -2945,7 +2966,7 @@
     const spk = agentEl.querySelector('.speak-btn');
     if (!spk) return;
     const hasText = collectAgentText(agentEl).length > 0;
-    spk.classList.toggle('hidden', !hasText);
+    spk.classList.toggle('hidden', !hasText || !ttsEnabled);
   }
 
   function stopSpeaking() {
@@ -3217,6 +3238,7 @@
 
   async function playStreamMessage(convId, msgId, text, auto, temp) {
     if (!convId || !msgId || !text || !text.trim()) return;
+    if (!ttsEnabled) return; // 生成语音服务关闭：所有语音都不生成
     const msgKey = ttsKey(convId, msgId);
     const meta0 = getTtsMeta();
     if (meta0[msgKey] && (meta0[msgKey].segs || 0) > 0) {
@@ -3386,6 +3408,7 @@
     const msgId = agentEl.dataset.msgId || ('msg' + Date.now());
     const text = collectAgentText(agentEl);
     if (!text.trim()) { showToast('这条消息没有可朗读的文字', true); return; }
+    if (!ttsEnabled) { showToast('语音服务已关闭，请在设置里开启', true); return; }
     // 生图进行中：不抢显存，排队等生图完成后再播
     if (liveGenRunning > 0) {
       pendingManualSpeak = { convId, msgId, text };
@@ -3416,12 +3439,17 @@
   // 自动朗读（自动点击）：只在“当前回合确实有新的 agent 回复”时触发一次。
   // 事件路径和轮询兜底都会调用，靠 autoSpokenMsgKey 去重，避免双触发/漏触发。
   function maybeAutoSpeak() {
+    refreshTtsPrefs(); // 设置页返回后立即生效
     if (!state.currentId) {
       console.log('[autoSpeak] 跳过: 无当前对话');
       return false;
     }
     if (!autoSpeak) {
       console.log('[autoSpeak] 自动朗读开关已关闭，跳过自动播放');
+      return false;
+    }
+    if (!ttsEnabled) {
+      console.log('[autoSpeak] 跳过: 生成语音服务已关闭');
       return false;
     }
     const agents = messagesEl.querySelectorAll('.msg.agent');
@@ -3690,6 +3718,15 @@
     inputBox.style.height = 'auto';
     inputBox.style.height = Math.min(inputBox.scrollHeight, 120) + 'px';
   });
+
+  // 语音开关初始化 + 设置页返回时刷新
+  refreshTtsPrefs();
+  if (document.addEventListener) {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refreshTtsPrefs();
+    });
+  }
+  if (window.addEventListener) window.addEventListener('focus', refreshTtsPrefs);
 
   init();
 })();
