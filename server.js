@@ -156,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.51';
+const VERSION = '10.52';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1379,6 +1379,7 @@ function findComfyInputDir() {
   if (config.comfyInputDir && fs.existsSync(config.comfyInputDir)) return config.comfyInputDir;
   const home = process.env.USERPROFILE || '';
   const cands = [
+    path.join('E:', 'ComfyUI', 'resources', 'ComfyUI', 'input'),
     path.join('E:', 'NewComfyUi', 'input'),
     path.join('E:', 'ComfyUI', 'input'),
     path.join('E:', 'Comfy-Desktop', 'ComfyUI-Installs', 'ComfyUI', 'ComfyUI', 'input'),

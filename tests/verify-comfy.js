@@ -199,6 +199,7 @@ check('server TTS 409 自动重试', server.includes('attempt >= 30') && server.
 check('app 发送时取消自动朗读补试', app.includes('clearTimeout(autoSpeakRetryTimer); // 取消待定的自动朗读补试') && app.includes('autoSpokenMsgKey = null; // 发送新消息后'));
 check('app 自动朗读跳过含生图消息', app.includes('最新消息含生图，等待图片完成') && app.includes('.agent-img img[data-comfy="1"]'));
 check('server 朗读与本地生图串行调度', server.includes('localGenBusy') && server.includes('function waitLocalGenFree(') && server.includes('function waitTtsFree(') && server.includes('语音未结束不启动本地生图'));
+check('server ComfyUI input 目录优先', server.includes("path.join('E:', 'ComfyUI', 'resources', 'ComfyUI', 'input')") && server.indexOf("resources', 'ComfyUI', 'input')") < server.indexOf("NewComfyUi', 'input')"));
 check('server TTS 等待本地生图', server.includes('ttsGate.then(async () => { await waitLocalGenFree(); return fn(); }'));
 check('app 整轮生图期间延迟朗读', app.includes('liveGenRunning') && app.includes('本回合生图进行中，等生图完成再朗读'));
 check('app 手动朗读生图时排队', app.includes('pendingManualSpeak') && app.includes('生图进行中，稍后朗读') && app.includes('function maybePlayPendingManualSpeak('));
@@ -206,7 +207,7 @@ check('app 保存图片优先本地缓存', app.includes('function comfyLocalPat
 check('app 生成语音服务总开关', app.includes('let ttsEnabled = true') && app.includes('function readTtsEnabledPref(') && app.includes('function refreshTtsPrefs(') && app.includes('生成语音服务已关闭'));
 check('app 语音关闭时按钮隐藏与手动拦截', app.includes('!hasText || !ttsEnabled') && app.includes('语音服务已关闭，请在设置里开启'));
 check('Java 生成语音服务开关', java.includes('KEY_TTS_ENABLED') && java.includes('public boolean getTtsEnabled()') && java.includes('生成语音服务（关闭后所有语音都不生成，自动朗读一起关）'));
-check('Java 设置表单可滚动+联动关闭', java.includes('new ScrollView(this)') && java.includes('if (!ttsEnabled) autoSpeak = false;') && java.includes('autoSpeakBox.setChecked(false)'));
+check('Java 设置表单可滚动+联动关闭', java.includes('new android.widget.ScrollView(this)') && java.includes('if (!ttsEnabled) autoSpeak = false;') && java.includes('autoSpeakBox.setChecked(false)'));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));
