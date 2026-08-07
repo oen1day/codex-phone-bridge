@@ -29,6 +29,7 @@ function run(agent, override) {
     ttsActiveKey: null,
     ttsActiveState: 'idle',
     autoSpokenMsgKey: null,
+    liveGenRunning: 0,
     metaObj: {},
     getTtsMeta: () => ctx.metaObj,
     ttsKey: (a, b) => a + '_' + b,

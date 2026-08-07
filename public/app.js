@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.48';
+  const APP_VERSION = '10.49';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -94,6 +94,8 @@
   let ttsActiveKey = null;
   let ttsActiveState = 'idle';
   let autoSpokenMsgKey = null;
+  let liveGenRunning = 0; // 本回合进行中的生图任务数（生图期间朗读延迟/排队）
+  let pendingManualSpeak = null; // 生图进行中手动点朗读时排队的任务
   let autoSpeakRetryTimer = null;
   let ttsSession = 0;
   const ttsWaitResolvers = new Set();
@@ -1488,16 +1490,22 @@
       startTurnPolling();
       startTurnWatchdog();
     } else if (method === 'comfyStarted') {
+      liveGenRunning++;
       startComfyProgress(params.promptId);
     } else if (method === 'comfyProgress') {
       updateComfyProgress(params.promptId, params.value, params.max);
     } else if (method === 'comfyDone') {
+      if (liveGenRunning > 0) liveGenRunning--;
       finishComfyProgress(params.promptId);
+      maybePlayPendingManualSpeak();
       scheduleTurnFallback(60); // 图已生成，若回合迟迟不结束则提示刷新恢复
     } else if (method === 'comfyError') {
+      if (liveGenRunning > 0) liveGenRunning--;
       finishComfyProgress(params.promptId);
+      maybePlayPendingManualSpeak();
       addSystemLine('⚠️ 图像生成失败: ' + ((params.error) || '未知错误'));
     } else if (method === 'turn/completed') {
+      liveGenRunning = 0;
       cancelTurnFallback();
       stopTurnPolling();
       stopTurnWatchdog();
@@ -1510,6 +1518,7 @@
       for (const b of state.blocks.values()) b.classList.remove('typing');
       loadThreads();
       const tid = params.turn && params.turn.id;
+      maybePlayPendingManualSpeak();
       // 立即试一次自动朗读（DOM 已有真实消息 id 时直接触发）
       triggerAutoSpeak();
       setTimeout(async () => {
@@ -1518,6 +1527,7 @@
         triggerAutoSpeak();
       }, 400);
     } else if (method === 'turn/error') {
+      liveGenRunning = 0;
       cancelTurnFallback();
       stopTurnPolling();
       stopTurnWatchdog();
@@ -1897,6 +1907,7 @@
     stopSpeaking(); // 发送即停旧语音播放并取消旧合成
     clearTimeout(autoSpeakRetryTimer); // 取消待定的自动朗读补试
     autoSpokenMsgKey = null; // 发送新消息后，旧消息不再被自动朗读补试
+    pendingManualSpeak = null; // 新消息到达，清空排队中的手动朗读
     const text = inputBox.value.trim();
     const images = state.pendingImages.slice();
     const files = state.pendingFiles.slice();
@@ -1943,6 +1954,8 @@
         state.running = true;
         turnGenCount = 0;
         genConfirmApproved = false;
+        liveGenRunning = 0;
+        pendingManualSpeak = null;
         turnStartLastMsgId = currentLastMsgId(); // 回合前基线：新回复 id 与其不同才会自动朗读
         replySeen[turn.id] = false;
         setStatus('正在运行…');
@@ -3357,6 +3370,12 @@
     const msgId = agentEl.dataset.msgId || ('msg' + Date.now());
     const text = collectAgentText(agentEl);
     if (!text.trim()) { showToast('这条消息没有可朗读的文字', true); return; }
+    // 生图进行中：不抢显存，排队等生图完成后再播
+    if (liveGenRunning > 0) {
+      pendingManualSpeak = { convId, msgId, text };
+      showToast('生图进行中，稍后朗读');
+      return;
+    }
     const msgKey = ttsKey(convId, msgId);
     if (ttsActiveKey === msgKey) { stopSpeaking(); return; }
     const meta = getTtsMeta();
@@ -3368,6 +3387,14 @@
   function speakMessage(convId, msgId, text, auto) {
     if (!convId || !msgId || !text || !text.trim()) return;
     playStreamMessage(convId, msgId, text, auto, false);
+  }
+
+  // 生图完成后，执行排队中的手动朗读
+  function maybePlayPendingManualSpeak() {
+    if (!pendingManualSpeak || liveGenRunning > 0) return;
+    const p = pendingManualSpeak;
+    pendingManualSpeak = null;
+    speakMessage(p.convId, p.msgId, p.text, false);
   }
 
   // 自动朗读（自动点击）：只在“当前回合确实有新的 agent 回复”时触发一次。
@@ -3395,6 +3422,11 @@
     if (String(msgId).indexOf('live-') === 0) {
       console.log('[autoSpeak] 跳过: 流式临时 id，等刷新后的真实 id');
       return false; // 流式临时 id，等刷新后的真实 id
+    }
+    // 整轮生图期间不自动朗读：等本回合生图全部完成后，纯文字消息再朗读
+    if (liveGenRunning > 0) {
+      console.log('[autoSpeak] 跳过: 本回合生图进行中，等生图完成再朗读');
+      return false;
     }
     // 最新消息含生图（comfy 图片）时先不自动朗读，让生图先行；纯文字消息按顺序朗读
     if (last.querySelector && last.querySelector('.agent-img img[data-comfy="1"]')) {

@@ -156,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.48';
+const VERSION = '10.49';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -734,9 +734,24 @@ async function checkUpdate() {
 // ---------- 离线语音朗读（IndexTTS-2 本机服务） ----------
 let ttsChain = Promise.resolve();
 let ttsGate = Promise.resolve();
-// 全局 TTS 门锁：保证同一时刻只向语音服务(8866)发一个请求，避免 409 繁忙
+let localGenBusy = false; // 本地生图（zimage/wash/upscale）正在占用显卡
+async function waitLocalGenFree(maxMs) {
+  const t0 = Date.now();
+  const limit = maxMs || 300000;
+  while (localGenBusy && Date.now() - t0 < limit) await new Promise(r => setTimeout(r, 1000));
+}
+function ttsAnyBusy() {
+  return ttsRealTimeBusy || preGenRunning || ttsInflight.size > 0;
+}
+// 语音合成未结束时，本地生图排队等待（与 ttsGateRun 互相让位，串行调度）
+async function waitTtsFree(maxMs) {
+  const t0 = Date.now();
+  const limit = maxMs || 300000;
+  while (ttsAnyBusy() && Date.now() - t0 < limit) await new Promise(r => setTimeout(r, 1000));
+}
+// 全局 TTS 门锁：同一时刻只向语音服务(8866)发一个请求；本地生图未结束时排队等待（串行调度，避免显存冲突）
 function ttsGateRun(fn) {
-  const p = ttsGate.then(fn, fn);
+  const p = ttsGate.then(async () => { await waitLocalGenFree(); return fn(); }, async () => { await waitLocalGenFree(); return fn(); });
   ttsGate = p.catch(() => {});
   return p;
 }
@@ -1487,6 +1502,7 @@ async function comfyGenerate(params) {
   const workflow = String(params.workflow || 'gptimage2');
   const file = COMFY_WORKFLOWS[workflow];
   if (!file) throw new BusinessError('未知工作流: ' + workflow);
+  const isLocalWorkflow = workflow === 'zimage' || workflow === 'zimage_upscale' || workflow === 'wash' || workflow === 'upscale';
   // gptimage2 双通道：imageProvider=openai 时直连官方 API；默认 comfy 走云端节点（Comfy 积分）
   if (workflow === 'gptimage2' && config.imageProvider === 'openai') {
     return await openaiGenerate(params);
@@ -1560,6 +1576,7 @@ async function comfyGenerate(params) {
     }
   }
 
+  const run = async () => {
   const clientId = crypto.randomBytes(8).toString('hex');
   let promptId = null;
   const extraData = {};
@@ -1659,6 +1676,16 @@ async function comfyGenerate(params) {
     try { fs.unlinkSync(path.join(inputTemp.dir, inputTemp.name)); } catch (_) {}
   }
   return { ok: true, path: outFile, url: '/uploads/comfy-' + id + ext, workflow, promptId };
+  };
+  if (isLocalWorkflow) {
+    await waitTtsFree(); // 语音未结束不启动本地生图（串行调度）
+    localGenBusy = true;
+  }
+  try {
+    return await run();
+  } finally {
+    if (isLocalWorkflow) localGenBusy = false;
+  }
 }
 
 // 清理 ComfyUI output 目录下 codex_* 输出副本，保留最近 20 个，避免堆积

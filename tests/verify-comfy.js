@@ -198,6 +198,10 @@ check('server TTS 全局门锁', server.includes('function ttsGateRun(') && serv
 check('server TTS 409 自动重试', server.includes('attempt >= 30') && server.includes('setTimeout(res, 2000)') && server.includes('r.status === 409'));
 check('app 发送时取消自动朗读补试', app.includes('clearTimeout(autoSpeakRetryTimer); // 取消待定的自动朗读补试') && app.includes('autoSpokenMsgKey = null; // 发送新消息后'));
 check('app 自动朗读跳过含生图消息', app.includes('最新消息含生图，等待图片完成') && app.includes('.agent-img img[data-comfy="1"]'));
+check('server 朗读与本地生图串行调度', server.includes('localGenBusy') && server.includes('function waitLocalGenFree(') && server.includes('function waitTtsFree(') && server.includes('语音未结束不启动本地生图'));
+check('server TTS 等待本地生图', server.includes('ttsGate.then(async () => { await waitLocalGenFree(); return fn(); }'));
+check('app 整轮生图期间延迟朗读', app.includes('liveGenRunning') && app.includes('本回合生图进行中，等生图完成再朗读'));
+check('app 手动朗读生图时排队', app.includes('pendingManualSpeak') && app.includes('生图进行中，稍后朗读') && app.includes('function maybePlayPendingManualSpeak('));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));
