@@ -93,12 +93,18 @@
     return wrap(8, 2, body);
   }
 
-  function buildPublish(topic, payload) {
+  function buildPublish(topic, payload, packetId) {
     const t = encodeString(topic);
-    const body = new Uint8Array(t.length + payload.length);
+    const body = new Uint8Array(t.length + (packetId ? 2 : 0) + payload.length);
     body.set(t, 0);
-    body.set(payload, t.length);
-    return wrap(3, 0, body);
+    let off = t.length;
+    if (packetId) {
+      body[off] = (packetId >> 8) & 0xff;
+      body[off + 1] = packetId & 0xff;
+      off += 2;
+    }
+    body.set(payload, off);
+    return wrap(3, packetId ? 2 : 0, body);
   }
 
   function parsePackets(buf) {
@@ -120,13 +126,13 @@
       if (remLen < 0) break;
       if (pos + remLen > buf.length) break;
       const body = buf.slice(pos, pos + remLen);
-      packets.push(parsePacket(b0 >> 4, body));
+      packets.push(parsePacket(b0 >> 4, body, b0 & 0x0f));
       off = pos + remLen;
     }
     return { packets, rest: buf.slice(off) };
   }
 
-  function parsePacket(type, body) {
+  function parsePacket(type, body, flags) {
     if (type === 2) return { type: 'connack', code: body[1] };
     if (type === 4) return { type: 'puback', packetId: (body[0] << 8) | body[1] };
     if (type === 9) return { type: 'suback', packetId: (body[0] << 8) | body[1] };
@@ -134,7 +140,14 @@
     if (type === 3) {
       const tlen = (body[0] << 8) | body[1];
       const topic = decoder.decode(body.slice(2, 2 + tlen));
-      return { type: 'publish', topic, payload: body.slice(2 + tlen) };
+      let off = 2 + tlen;
+      let packetId = 0;
+      const qos = (flags >> 1) & 3;
+      if (qos > 0) {
+        packetId = (body[off] << 8) | body[off + 1];
+        off += 2;
+      }
+      return { type: 'publish', topic, qos, packetId, payload: body.slice(off) };
     }
     return { type: 'unknown' };
   }
@@ -183,6 +196,10 @@
       this.clientId = opts.clientId || ('cb_' + randId());
       this.chunks = {};
       this._sentChunks = {}; // 已发送的大消息分片缓存，供接收端补拉（QoS 0 可能丢片）
+      this._pktId = 1;
+      this._unacked = {}; // QoS1 未确认 publish，超时自动重发
+      this._resendCount = 0; // 分片补拉次数（诊断日志）
+      this._chunkTimeoutCount = 0; // 分片重组超时次数（诊断日志）
       this.closed = false;
       this._retryTimer = null;
       this.pingTimer = null;
@@ -226,6 +243,7 @@
         };
         const onClose = () => {
           this.ready = false;
+          this._clearUnacked();
           fail(new Error('中继连接被关闭'));
           if (!this.closed) {
             this.onStatus('连接断开，重连中…');
@@ -300,7 +318,12 @@
     }
 
     _handlePacket(packet) {
+      if (packet.type === 'puback') {
+        this._handlePuback(packet.packetId);
+        return;
+      }
       if (packet.type === 'publish') {
+        if (packet.qos === 1 && packet.packetId) this._sendPuback(packet.packetId);
         this._onPublish(packet.payload);
       }
     }
@@ -340,6 +363,8 @@
         // 分片重组超时按片数自适应：每 20 片加 10 秒，上限 120 秒（大片数在公共 MQTT 上需要更久收齐）
         entry.timer = setTimeout(() => {
           if (this.chunks[env.c] === entry) delete this.chunks[env.c];
+          this._chunkTimeoutCount++;
+          console.log('[relay] 分片重组超时 id=' + env.c + ' 累计=' + this._chunkTimeoutCount);
           if (this.onChunkError) {
             try { this.onChunkError('中继消息分片不完整，已丢弃'); } catch (_) {}
           }
@@ -381,6 +406,8 @@
         if (!entry.parts[i]) missing.push(i);
       }
       if (!missing.length) return;
+      this._resendCount++;
+      console.log('[relay] 分片补拉 missing=' + missing.length + ' 累计=' + this._resendCount);
       this.send({ type: 'relay-resend', id, missing }).catch(() => {});
     }
 
@@ -393,8 +420,52 @@
         const part = rec.parts[i];
         if (!part) continue;
         const chunk = JSON.stringify({ c: req.id, t: rec.parts.length, i, b: b64(part) });
-        this.ws.send(buildPublish(this.outTopic, encoder.encode(chunk)));
+        this._publish(this.outTopic, encoder.encode(chunk));
       }
+    }
+
+    // QoS1 发布：带 packet id，未收到 PUBACK 每 3 秒重发，最多 6 次后放弃
+    _publish(topic, payload) {
+      if (!this.ws || this.ws.readyState !== 1) return;
+      this._pktId = this._pktId >= 0xffff ? 1 : this._pktId + 1;
+      const id = this._pktId;
+      const rec = { topic, payload, id, attempts: 0, timer: null };
+      this._unacked[id] = rec;
+      this.ws.send(buildPublish(topic, payload, id));
+      rec.timer = setTimeout(() => this._retryPublish(rec), 3000);
+    }
+
+    _retryPublish(rec) {
+      if (!this._unacked[rec.id]) return;
+      if (rec.attempts >= 6) {
+        delete this._unacked[rec.id];
+        console.log('[relay] publish 未确认已放弃 id=' + rec.id);
+        return;
+      }
+      rec.attempts++;
+      try { this.ws.send(buildPublish(rec.topic, rec.payload, rec.id)); } catch (_) {}
+      rec.timer = setTimeout(() => this._retryPublish(rec), 3000);
+    }
+
+    _handlePuback(id) {
+      const rec = this._unacked[id];
+      if (!rec) return;
+      if (rec.timer) clearTimeout(rec.timer);
+      delete this._unacked[id];
+    }
+
+    _sendPuback(id) {
+      try {
+        this.ws.send(wrap(4, 0, new Uint8Array([(id >> 8) & 0xff, id & 0xff])));
+      } catch (_) {}
+    }
+
+    _clearUnacked() {
+      for (const c of Object.keys(this._unacked)) {
+        const rec = this._unacked[c];
+        if (rec && rec.timer) clearTimeout(rec.timer);
+      }
+      this._unacked = {};
     }
 
     async send(obj) {
@@ -404,7 +475,7 @@
       const env = await encryptJson(this.key, obj);
       const bytes = encoder.encode(JSON.stringify(env));
       if (bytes.length <= CHUNK_SIZE) {
-        this.ws.send(buildPublish(this.outTopic, bytes));
+        this._publish(this.outTopic, bytes);
         return;
       }
       const id = randId();
@@ -414,7 +485,7 @@
         const part = bytes.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
         parts.push(part);
         const chunk = JSON.stringify({ c: id, t: total, i, b: b64(part) });
-        this.ws.send(buildPublish(this.outTopic, encoder.encode(chunk)));
+        this._publish(this.outTopic, encoder.encode(chunk));
       }
       // 保留已发分片 120 秒，供接收端补拉
       const rec = { parts, timer: null };
@@ -436,6 +507,7 @@
         if (rec && rec.timer) clearTimeout(rec.timer);
       }
       this._sentChunks = {};
+      this._clearUnacked();
       if (this._retryTimer) {
         clearTimeout(this._retryTimer);
         this._retryTimer = null;

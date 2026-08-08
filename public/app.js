@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.54';
+  const APP_VERSION = '10.55';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -925,7 +925,7 @@
       block.innerHTML = renderAgentTextWithImages(d.text || '');
       block.querySelectorAll('.agent-img img[data-comfy="1"]').forEach(function (im) {
         var s = String(im.getAttribute('src') || '');
-        if (s.indexOf('/') === 0 && s.indexOf('//') !== 0) {
+        if ((s.indexOf('/') === 0 && s.indexOf('//') !== 0) || s.indexOf('data:image/gif') === 0) {
           setTimeout(function () { resolveComfyImg(im); }, 120);
         }
       });
@@ -956,7 +956,9 @@
         const alt = (parts[i + 1] || '').trim() || '图片';
         if (/\.(png|jpe?g|gif|webp)(\?|#|$)/i.test(src)) {
           const comfy = String(src).indexOf('/uploads/comfy-') === 0 ? ' data-comfy="1"' : '';
-          html += '<span class="agent-img"><img src="' + escapeHtml(src) + '" alt="' + escapeHtml(alt) + '" loading="lazy" data-save="' + escapeHtml(src) + '"' + comfy + '>' +
+          // 中继模式：先放透明占位，渲染后由 resolveComfyImg 分片取图替换，不走“先加载失败再补救”
+          const imgSrc = (comfy && relayCfg) ? 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' : src;
+          html += '<span class="agent-img"><img src="' + escapeHtml(imgSrc) + '" alt="' + escapeHtml(alt) + '" loading="lazy" data-save="' + escapeHtml(src) + '"' + comfy + '>' +
             '<span class="agent-img-tag">' + escapeHtml(alt) + '</span>' +
             '<button class="img-save-btn">保存到相册</button></span>';
         } else {
@@ -1140,9 +1142,31 @@
     }
   }
 
-  // 中继模式取不到 /uploads 图片，走中继通道换 dataURL
-  function fetchComfyDataUrl(path) {
-    return apiCall('comfyImage', { path }).then(r => (r && r.dataUrl) || null).catch(() => null);
+  // 中继模式取不到 /uploads 图片：分片文件协议拉取（meta+index，每片独立 RPC，原图字节不变）
+  // 返回 dataURL 字符串；文件已被清理返回 'FILE_GONE'；失败返回 null
+  async function fetchComfyDataUrl(path) {
+    const meta = await apiCall('comfyImage', { path, meta: true }, 30000);
+    if (!meta) return null;
+    if (meta.gone) return 'FILE_GONE';
+    if (!meta.ok || !meta.chunkCount) return null;
+    const parts = new Array(meta.chunkCount);
+    const queue = [];
+    for (let i = 0; i < meta.chunkCount; i++) queue.push(i);
+    const workers = Math.min(4, meta.chunkCount);
+    async function worker() {
+      while (queue.length) {
+        const idx = queue.shift();
+        const r = await apiCall('comfyImage', { path, index: idx }, 60000);
+        if (!r || !r.ok || r.b64 == null) throw new Error('分片获取失败');
+        parts[idx] = r.b64;
+      }
+    }
+    try {
+      await Promise.all(Array.from({ length: workers }, worker));
+    } catch (_) {
+      return null;
+    }
+    return 'data:' + (meta.mime || 'image/png') + ';base64,' + parts.join('');
   }
 
   // App 内缓存映射：uploads/comfy-xxx.png -> 手机私有缓存文件（重载对话时恢复显示）
@@ -1152,12 +1176,12 @@
   function saveComfyImgCache(map) {
     try {
       const entries = Object.entries(map || {});
-      while (entries.length > 100) entries.shift(); // 图片映射最多 100 条，删最旧
+      while (entries.length > 200) entries.shift(); // 图片映射最多 200 条（缓存 50 张 + 余量），删最旧
       localStorage.setItem('comfyImgCache', JSON.stringify(Object.fromEntries(entries)));
     } catch (_) {}
   }
 
-  // 生成图渲染成功后下载到 App 私有缓存（最多 10 张），并通知电脑删除 uploads 副本
+  // 生成图渲染成功后下载到 App 私有缓存（最多 50 张），缓存成功后才延迟 1 小时通知电脑删除副本
   function cacheGeneratedImage(img) {
     if (!window.AndroidBridge || !window.AndroidBridge.cacheImageToApp) return;
     if (!img || !img.dataset || img.dataset.comfy !== '1' || img.dataset.cached) return;
@@ -1166,8 +1190,8 @@
     const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(orig);
     const src = img.src || orig || '';
     if (String(src).indexOf('file://') === 0) {
-      // 已从本地缓存恢复：只删电脑副本
-      if (m) apiCall('deleteComfyImage', { path: '/uploads/' + m[1] }).catch(() => {});
+      // 已从本地缓存恢复：延迟删除电脑副本（确认缓存存在才删）
+      if (m) scheduleComfyDelete('/uploads/' + m[1]);
       return;
     }
     let url = src;
@@ -1181,25 +1205,67 @@
           const map = loadComfyImgCache();
           map[m[1]] = p;
           saveComfyImgCache(map);
-          apiCall('deleteComfyImage', { path: '/uploads/' + m[1] }).catch(() => {});
+          scheduleComfyDelete('/uploads/' + m[1]);
         }
       }
     } catch (_) {}
   }
 
-  // 图片渲染失败时恢复：先查 App 缓存（file://），再走中继通道取 dataURL
+  // 延迟删除电脑副本：缓存成功 1 小时后再删；队列存 localStorage，页面启动/聚焦时补执行
+  function scheduleComfyDelete(path) {
+    try {
+      const q = JSON.parse(localStorage.getItem('pendingComfyDeletes') || '[]') || [];
+      q.push({ path, ts: Date.now() + 3600000 });
+      localStorage.setItem('pendingComfyDeletes', JSON.stringify(q.slice(-50)));
+    } catch (_) {}
+  }
+  function flushPendingComfyDeletes() {
+    let q = [];
+    try { q = JSON.parse(localStorage.getItem('pendingComfyDeletes') || '[]') || []; } catch (_) {}
+    const now = Date.now();
+    const remain = [];
+    for (const it of q) {
+      if (it && it.ts && now >= it.ts) {
+        apiCall('deleteComfyImage', { path: it.path }).catch(() => remain.push(it));
+      } else {
+        remain.push(it);
+      }
+    }
+    try { localStorage.setItem('pendingComfyDeletes', JSON.stringify(remain.slice(-50))); } catch (_) {}
+  }
+
+  // 图片渲染失败/中继取不到时恢复：先查 App 缓存（file://），再分片取 dataURL，失败自动重试
   function resolveComfyImg(img) {
     const orig = img.dataset && img.dataset.save;
     if (String(orig).indexOf('/uploads/comfy-') !== 0) return;
     const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(orig);
     if (!m) return;
+    const cur = String(img.src || '');
+    if (cur.indexOf('data:') === 0 || cur.indexOf('file://') === 0) return; // 已取到
     const map = loadComfyImgCache();
     if (map[m[1]]) {
       img.src = 'file://' + String(map[m[1]]).replace(/\\/g, '/');
       return;
     }
-    fetchComfyDataUrl(orig).then((dataUrl) => {
-      if (dataUrl && img.src !== dataUrl) img.src = dataUrl;
+    retryFetchComfyData(img, orig, 0);
+  }
+
+  function retryFetchComfyData(img, path, attempt) {
+    const delays = [0, 1000, 3000, 8000]; // 1s/3s/8s 退避
+    fetchComfyDataUrl(path).then((dataUrl) => {
+      if (dataUrl === 'FILE_GONE') {
+        showToast('原图已清理，无法恢复', true);
+        return;
+      }
+      if (dataUrl && typeof dataUrl === 'string') {
+        if (img.src !== dataUrl) img.src = dataUrl;
+        return;
+      }
+      if (attempt < 3) {
+        setTimeout(() => retryFetchComfyData(img, path, attempt + 1), delays[attempt + 1]);
+      } else {
+        showToast('图片传输失败，请重试', true);
+      }
     });
   }
 
@@ -2637,6 +2703,7 @@
     ttsEnabled = readTtsEnabledPref();
     autoSpeak = readAutoSpeakPref();
     if (!ttsEnabled) autoSpeak = false;
+    flushPendingComfyDeletes(); // 补执行到期的延迟删除
     for (const el of messagesEl.querySelectorAll('.msg.agent')) updateSpeakBtnVisibility(el);
   }
 

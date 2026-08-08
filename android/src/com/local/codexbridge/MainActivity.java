@@ -82,7 +82,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.54";
+    private static final String APP_VERSION = "10.55";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -382,15 +382,15 @@ public class MainActivity extends Activity {
                 java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
                 fos.write(data);
                 fos.close();
-                // 缓存上限 10 张，超出删最旧
+                // 缓存上限 50 张，超出删最旧
                 File[] files = dir.listFiles();
-                if (files != null && files.length > 10) {
+                if (files != null && files.length > 50) {
                     java.util.Arrays.sort(files, new java.util.Comparator<java.io.File>() {
                         @Override public int compare(java.io.File a, java.io.File b) {
                             return Long.compare(a.lastModified(), b.lastModified());
                         }
                     });
-                    for (int i = 0; i < files.length - 10; i++) files[i].delete();
+                    for (int i = 0; i < files.length - 50; i++) files[i].delete();
                 }
                 return f.getAbsolutePath();
             } catch (Exception e) {

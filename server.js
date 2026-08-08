@@ -156,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.54';
+const VERSION = '10.55';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -663,15 +663,18 @@ async function onRelayMessage(msg, ch) {
   }
   if (msg.type === 'rpc') {
     console.log('[relay] 收到手机请求: ' + msg.method);
+    const t0 = Date.now();
     try {
       const result = await apiDispatch(msg.method, msg.params || {}, msg.clientId);
       const resp = { type: 'response', id: msg.id, ok: true, result };
       if (msg.clientId) resp.to = msg.clientId;
+      console.log('[relay] 回复 ' + msg.method + ' 耗时 ' + (Date.now() - t0) + 'ms 字节 ' + Buffer.byteLength(JSON.stringify(resp)));
       if (ch) ch.send(resp).catch(() => {});
       console.log('[relay] 已回复: ' + msg.method);
     } catch (e) {
       const resp = { type: 'response', id: msg.id, ok: false, error: (e && e.message) || '错误' };
       if (msg.clientId) resp.to = msg.clientId;
+      console.log('[relay] 回复失败 ' + msg.method + ' 耗时 ' + (Date.now() - t0) + 'ms 字节 ' + Buffer.byteLength(JSON.stringify(resp)));
       if (ch) ch.send(resp).catch(() => {});
       console.error('[relay] 请求失败: ' + msg.method + ' -> ' + (e && e.message));
     }
@@ -1727,14 +1730,33 @@ function safePubPath(p) {
   return f;
 }
 
-// 中继模式取图：把 uploads/comfy-* 转成 dataURL 经中继回传手机
-function comfyImageDataUrl(p) {
-  const f = safeComfyPath(p);
-  if (!f) throw new BusinessError('无效的图片路径');
-  const data = fs.readFileSync(f);
+// 中继模式取图：分片文件协议（meta+index，原图字节不变，不压缩/不转码）；文件缺失返回 file-gone 标记
+function comfyImageData(params) {
+  const s = String((params && params.path) || '');
+  const m = /^\/uploads\/(comfy-[A-Za-z0-9._-]+)$/.exec(s);
+  if (!m) throw new BusinessError('无效的图片路径');
+  const f = path.join(UPLOAD_DIR, m[1]);
+  const gone = !f.startsWith(UPLOAD_DIR) || !fs.existsSync(f);
+  if (gone) return { ok: false, gone: true, error: 'file-gone' };
+  const st = fs.statSync(f);
   const ext = path.extname(f).toLowerCase();
   const mime = ext === '.jpg' ? 'image/jpeg' : (ext === '.webp' ? 'image/webp' : 'image/png');
-  return { dataUrl: 'data:' + mime + ';base64,' + data.toString('base64') };
+  const total = Math.max(1, Math.ceil(st.size / FILE_DATA_CHUNK));
+  if (params.meta) {
+    return { ok: true, gone: false, name: path.basename(f), size: st.size, mime, chunkCount: total, chunkSize: FILE_DATA_CHUNK };
+  }
+  const index = Number(params.index);
+  if (!Number.isInteger(index) || index < 0 || index >= total) throw new BusinessError('无效的分片序号');
+  const start = index * FILE_DATA_CHUNK;
+  const len = Math.min(FILE_DATA_CHUNK, st.size - start);
+  const buf = Buffer.alloc(len);
+  const fd = fs.openSync(f, 'r');
+  try {
+    fs.readSync(fd, buf, 0, len, start);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return { ok: true, index, total, b64: buf.toString('base64') };
 }
 
 // 兜底清理：uploads/ 下超过 30 分钟且未被删除的 comfy-*/upload-* 与无前缀上传图（16 位 hex 命名的图片）
@@ -1743,6 +1765,14 @@ function cleanupComfyImages() {
     if (!fs.existsSync(UPLOAD_DIR)) return;
     const now = Date.now();
     for (const name of fs.readdirSync(UPLOAD_DIR)) {
+      // 延迟删除标记（.del）：2 小时后真正删除；不参与 30 分钟快速清理
+      if (name.endsWith('.del')) {
+        try {
+          const st = fs.statSync(path.join(UPLOAD_DIR, name));
+          if (now - st.mtimeMs > 2 * 60 * 60 * 1000) fs.unlinkSync(path.join(UPLOAD_DIR, name));
+        } catch (_) {}
+        continue;
+      }
       const noPrefixImg = /^[0-9a-f]{8,32}\.(png|jpe?g|gif|webp)$/i.test(name);
       if (!name.startsWith('comfy-') && !name.startsWith('upload-') && !noPrefixImg) continue;
       try {
@@ -2077,11 +2107,19 @@ async function apiDispatch(method, params, clientId) {
     case 'comfyGenerate':
       return await comfyGenerate(params || {});
     case 'comfyImage':
-      return comfyImageDataUrl(params && params.path);
+      return comfyImageData(params);
     case 'deleteComfyImage': {
-      const f = safeComfyPath(params && params.path);
-      if (!f) throw new BusinessError('无效的图片路径');
-      try { fs.unlinkSync(f); } catch (_) {}
+      // 延迟删除：先重命名为 .del，2 小时后由兜底清理真正删除，避免回源时文件已不存在
+      const s = String((params && params.path) || '');
+      const m = /^\/uploads\/(comfy-[A-Za-z0-9._-]+)$/.exec(s);
+      if (!m) throw new BusinessError('无效的图片路径');
+      const f = path.join(UPLOAD_DIR, m[1]);
+      if (f.startsWith(UPLOAD_DIR)) {
+        try {
+          const del = f + '.del';
+          if (fs.existsSync(f) && !fs.existsSync(del)) fs.renameSync(f, del);
+        } catch (_) {}
+      }
       return { ok: true };
     }
     case 'filePublish': {
