@@ -156,7 +156,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.55';
+const VERSION = '10.56';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1730,14 +1730,83 @@ function safePubPath(p) {
   return f;
 }
 
+// GitHub 图片通道：生成图上传到 GitHub Release 资产，手机端用 https 直显（比公共 MQTT 更稳）
+const GITHUB_IMG_TAG = 'img-cache';
+const GITHUB_IMG_REPO = 'oen1day/codex-phone-bridge';
+const githubImgMapPath = path.join(UPLOAD_DIR, '.github-img-map.json');
+function loadGithubImgMap() {
+  try { return JSON.parse(fs.readFileSync(githubImgMapPath, 'utf8')) || {}; } catch (_) { return {}; }
+}
+function saveGithubImgMap(m) {
+  try { fs.writeFileSync(githubImgMapPath, JSON.stringify(m)); } catch (_) {}
+}
+async function getGithubToken() {
+  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+  try {
+    const { execFileSync } = require('child_process');
+    return execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', timeout: 10000 }).trim() || '';
+  } catch (_) { return ''; }
+}
+async function githubApi(method, pathname, token, body) {
+  const res = await fetch('https://api.github.com' + pathname, {
+    method,
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      'Accept': 'application/vnd.github+json',
+      'Content-Type': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (_) {}
+  return { status: res.status, json };
+}
+async function uploadComfyImageToGithub(file) {
+  const token = await getGithubToken();
+  if (!token) throw new BusinessError('GitHub 未登录：请在电脑上先运行 gh auth login');
+  const name = path.basename(file);
+  const map = loadGithubImgMap();
+  if (map[name]) return map[name];
+  let rel = await githubApi('GET', '/repos/' + GITHUB_IMG_REPO + '/releases/tags/' + GITHUB_IMG_TAG, token);
+  let releaseId = rel.json && rel.json.id;
+  if (!releaseId) {
+    const created = await githubApi('POST', '/repos/' + GITHUB_IMG_REPO + '/releases', token, {
+      tag_name: GITHUB_IMG_TAG,
+      name: 'img-cache',
+      body: '鳍点AI 图片缓存通道',
+      draft: false,
+      prerelease: true
+    });
+    if (!created.json || !created.json.id) throw new BusinessError('GitHub 创建图片缓存 release 失败');
+    releaseId = created.json.id;
+  }
+  const url = 'https://api.github.com/repos/' + GITHUB_IMG_REPO + '/releases/' + releaseId + '/assets?name=' + encodeURIComponent(name);
+  const data = fs.readFileSync(file);
+  const up = await fetch(url, {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/octet-stream' },
+    body: data
+  });
+  if (!up.ok) throw new BusinessError('GitHub 图片上传失败 HTTP ' + up.status);
+  const ghUrl = 'https://github.com/' + GITHUB_IMG_REPO + '/releases/download/' + GITHUB_IMG_TAG + '/' + name;
+  map[name] = ghUrl;
+  saveGithubImgMap(map);
+  return ghUrl;
+}
+
 // 中继模式取图：分片文件协议（meta+index，原图字节不变，不压缩/不转码）；文件缺失返回 file-gone 标记
-function comfyImageData(params) {
+async function comfyImageData(params) {
   const s = String((params && params.path) || '');
   const m = /^\/uploads\/(comfy-[A-Za-z0-9._-]+)$/.exec(s);
   if (!m) throw new BusinessError('无效的图片路径');
   const f = path.join(UPLOAD_DIR, m[1]);
   const gone = !f.startsWith(UPLOAD_DIR) || !fs.existsSync(f);
   if (gone) return { ok: false, gone: true, error: 'file-gone' };
+  if (params.github) {
+    const ghUrl = await uploadComfyImageToGithub(f);
+    return { ok: true, githubUrl: ghUrl };
+  }
   const st = fs.statSync(f);
   const ext = path.extname(f).toLowerCase();
   const mime = ext === '.jpg' ? 'image/jpeg' : (ext === '.webp' ? 'image/webp' : 'image/png');
@@ -1777,7 +1846,9 @@ function cleanupComfyImages() {
       if (!name.startsWith('comfy-') && !name.startsWith('upload-') && !noPrefixImg) continue;
       try {
         const st = fs.statSync(path.join(UPLOAD_DIR, name));
-        if (now - st.mtimeMs > 30 * 60 * 1000) fs.unlinkSync(path.join(UPLOAD_DIR, name));
+        // comfy-* 是生成图：保留 7 天（历史消息/回源需要）；upload-* 与无前缀上传图仍 30 分钟清理
+        const ttl = name.startsWith('comfy-') ? 7 * 24 * 60 * 60 * 1000 : 30 * 60 * 1000;
+        if (now - st.mtimeMs > ttl) fs.unlinkSync(path.join(UPLOAD_DIR, name));
       } catch (_) {}
     }
   } catch (_) {}
@@ -2107,7 +2178,7 @@ async function apiDispatch(method, params, clientId) {
     case 'comfyGenerate':
       return await comfyGenerate(params || {});
     case 'comfyImage':
-      return comfyImageData(params);
+      return await comfyImageData(params);
     case 'deleteComfyImage': {
       // 延迟删除：先重命名为 .del，2 小时后由兜底清理真正删除，避免回源时文件已不存在
       const s = String((params && params.path) || '');

@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.55';
+  const APP_VERSION = '10.56';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -90,6 +90,8 @@
   autoSpeak = readAutoSpeakPref();
   let ttsEnabled = true;
   ttsEnabled = readTtsEnabledPref();
+  let githubImageMode = false;
+  githubImageMode = readGithubImageMode();
   const speakButtons = new Map();
   const ttsMem = new Map();
   const ttsGenerating = new Map();
@@ -1236,18 +1238,35 @@
 
   // 图片渲染失败/中继取不到时恢复：先查 App 缓存（file://），再分片取 dataURL，失败自动重试
   function resolveComfyImg(img) {
+    githubImageMode = readGithubImageMode(); // 设置页切换后立即生效
     const orig = img.dataset && img.dataset.save;
     if (String(orig).indexOf('/uploads/comfy-') !== 0) return;
     const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(orig);
     if (!m) return;
     const cur = String(img.src || '');
     if (cur.indexOf('data:') === 0 || cur.indexOf('file://') === 0) return; // 已取到
+    if (String(cur).indexOf('https://github.com/') === 0) return; // 已用 GitHub 直链
     const map = loadComfyImgCache();
     if (map[m[1]]) {
       img.src = 'file://' + String(map[m[1]]).replace(/\\/g, '/');
       return;
     }
+    if (githubImageMode) {
+      githubFetchComfy(img, orig);
+      return;
+    }
     retryFetchComfyData(img, orig, 0);
+  }
+
+  // GitHub 通道：请求电脑端把图片上传到 GitHub Release 资产，拿到 https 直链显示；失败回退中继分片
+  function githubFetchComfy(img, path) {
+    apiCall('comfyImage', { path, github: true }, 60000).then(r => {
+      if (r && r.ok && r.githubUrl) {
+        if (img.src !== r.githubUrl) img.src = r.githubUrl;
+        return;
+      }
+      retryFetchComfyData(img, path, 0); // GitHub 不可用/未登录：回退中继分片
+    });
   }
 
   function retryFetchComfyData(img, path, attempt) {
@@ -2698,11 +2717,23 @@
     return true;
   }
 
+  // GitHub 图片通道开关：开=生成图上传 GitHub Release 资产后用 https 直显（更快更稳）；关=默认中继分片
+  function readGithubImageMode() {
+    try {
+      if (window.AndroidBridge && window.AndroidBridge.getGithubImageMode) {
+        const s = String(window.AndroidBridge.getGithubImageMode());
+        return s !== 'false' && s !== '0';
+      }
+    } catch (_) {}
+    return false;
+  }
+
   // 从原生设置刷新语音开关（设置页返回后立即生效），并同步朗读按钮显隐
   function refreshTtsPrefs() {
     ttsEnabled = readTtsEnabledPref();
     autoSpeak = readAutoSpeakPref();
     if (!ttsEnabled) autoSpeak = false;
+    githubImageMode = readGithubImageMode();
     flushPendingComfyDeletes(); // 补执行到期的延迟删除
     for (const el of messagesEl.querySelectorAll('.msg.agent')) updateSpeakBtnVisibility(el);
   }
