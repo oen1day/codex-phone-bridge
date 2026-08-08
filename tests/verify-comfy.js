@@ -224,6 +224,8 @@ check('app 延迟删除电脑副本', app.includes('function scheduleComfyDelete
 check('Java 图片缓存上限 50', java.includes('files.length > 50') && java.includes('files.length - 50'));
 check('server comfy-* 保留 7 天', server.includes("const ttl = name.startsWith('comfy-') ? 7 * 24 * 60 * 60 * 1000"));
 check('server GitHub 图片通道', server.includes('uploadComfyImageToGithub(') && server.includes('GITHUB_IMG_TAG') && server.includes('params.github') && server.includes('githubUrl'));
+check('server GitHub 图片资产清理', server.includes('function pruneGithubImages(') && server.includes("releases/assets/' + a.id") && server.includes('githubImgRetentionCount') && server.includes('24 * 60 * 60 * 1000'));
+check('config.example GitHub 保留配置', read('config.example.json').includes('githubImgRetentionCount'));
 check('Java GitHub 图片开关', java.includes('KEY_GITHUB_IMG') && java.includes('public boolean getGithubImageMode()') && java.includes('用 GitHub 传输图片'));
 check('app GitHub 图片模式', app.includes('function readGithubImageMode(') && app.includes('githubFetchComfy(') && app.includes('github: true') && app.includes('githubImageMode'));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));

@@ -136,6 +136,7 @@ function loadConfig() {
     openaiApiKey: '',
     imageProvider: 'comfy',
     httpsProxy: '',
+    githubImgRetentionCount: 200,
     autoCleanThreads: true,
     threadRetentionDays: 30,
     threadRetentionCount: 100
@@ -156,7 +157,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.56';
+const VERSION = '10.57';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1795,6 +1796,44 @@ async function uploadComfyImageToGithub(file) {
   return ghUrl;
 }
 
+// GitHub 图片资产清理：img-cache release 最多保留最近 N 个（默认 200），超出按创建时间删最旧，并同步本地映射
+async function pruneGithubImages() {
+  try {
+    const token = await getGithubToken();
+    if (!token) return;
+    const keepCount = Math.max(20, Number(config.githubImgRetentionCount) || 200);
+    const rel = await githubApi('GET', '/repos/' + GITHUB_IMG_REPO + '/releases/tags/' + GITHUB_IMG_TAG, token);
+    if (!rel.json || !rel.json.id) return;
+    const assets = [];
+    let page = 1;
+    while (page <= 20) {
+      const r = await githubApi('GET', '/repos/' + GITHUB_IMG_REPO + '/releases/' + rel.json.id + '/assets?per_page=100&page=' + page, token);
+      const arr = (r.json && Array.isArray(r.json)) ? r.json : [];
+      if (!arr.length) break;
+      assets.push.apply(assets, arr);
+      if (arr.length < 100) break;
+      page++;
+    }
+    if (assets.length <= keepCount) return;
+    assets.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    const keep = new Set(assets.slice(0, keepCount).map(a => a.id));
+    const map = loadGithubImgMap();
+    let removed = 0;
+    for (const a of assets) {
+      if (keep.has(a.id)) continue;
+      await githubApi('DELETE', '/repos/' + GITHUB_IMG_REPO + '/releases/assets/' + a.id, token);
+      for (const k of Object.keys(map)) {
+        if (map[k] && String(map[k]).indexOf('/' + a.name) >= 0) delete map[k];
+      }
+      removed++;
+    }
+    saveGithubImgMap(map);
+    if (removed) console.log('[clean] GitHub 图片资产清理: 删除 ' + removed + ' 个（保留 ' + keepCount + ' 个）');
+  } catch (e) {
+    console.error('[clean] GitHub 图片资产清理失败: ' + (e && e.message));
+  }
+}
+
 // 中继模式取图：分片文件协议（meta+index，原图字节不变，不压缩/不转码）；文件缺失返回 file-gone 标记
 async function comfyImageData(params) {
   const s = String((params && params.path) || '');
@@ -1857,6 +1896,8 @@ cleanupComfyImages();
 setInterval(cleanupComfyImages, 60 * 60 * 1000);
 cleanupComfyOutput();
 setInterval(cleanupComfyOutput, 60 * 60 * 1000);
+pruneGithubImages();
+setInterval(pruneGithubImages, 24 * 60 * 60 * 1000); // 每天一次：GitHub 图片资产保留上限
 
 // 发布文件数量上限：uploads/pub-* 最多保留 max 个，超出按修改时间删最旧（不影响 comfy-*/upload-*/工作区）
 function prunePubFiles(max) {

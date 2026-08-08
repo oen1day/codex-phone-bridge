@@ -28,6 +28,7 @@
   "openaiApiKey": "",
   "imageProvider": "comfy",
   "httpsProxy": "",
+  "githubImgRetentionCount": 200,
   "autoCleanThreads": true,
   "threadRetentionDays": 30,
   "threadRetentionCount": 100
