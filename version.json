@@ -1,5 +1,5 @@
 {
-  "version": "10.54",
-  "pcZip": "https://github.com/oen1day/codex-phone-bridge/releases/download/v10.54/CodexPhoneBridge-PC.zip",
-  "apk": "https://github.com/oen1day/codex-phone-bridge/releases/download/v10.54/CodexPhoneBridge.apk"
+    "apk":  "https://github.com/oen1day/codex-phone-bridge/releases/download/v10.55/CodexPhoneBridge.apk",
+    "pcZip":  "https://github.com/oen1day/codex-phone-bridge/releases/download/v10.55/CodexPhoneBridge-PC.zip",
+    "version":  "10.55"
 }
