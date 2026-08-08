@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.57';
+  const APP_VERSION = '10.58';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -925,12 +925,15 @@
       block.classList.add('agent-text');
       if (d.typing) block.classList.add('typing'); else block.classList.remove('typing');
       block.innerHTML = renderAgentTextWithImages(d.text || '');
-      block.querySelectorAll('.agent-img img[data-comfy="1"]').forEach(function (im) {
-        var s = String(im.getAttribute('src') || '');
-        if ((s.indexOf('/') === 0 && s.indexOf('//') !== 0) || s.indexOf('data:image/gif') === 0) {
-          setTimeout(function () { resolveComfyImg(im); }, 120);
-        }
-      });
+      if (relayCfg) {
+        // 仅中继模式主动取图；局域网直链正常显示，不做替换
+        block.querySelectorAll('.agent-img img[data-comfy="1"]').forEach(function (im) {
+          var s = String(im.getAttribute('src') || '');
+          if ((s.indexOf('/') === 0 && s.indexOf('//') !== 0) || s.indexOf('data:image/gif') === 0) {
+            setTimeout(function () { resolveComfyImg(im); }, 120);
+          }
+        });
+      }
     } else if (d.kind === 'cmd') {
       block.className = 'block cmd';
       block.innerHTML = '<div class="cmd-line">🔧 ' + escapeHtml(d.label || '正在执行电脑命令…') +
@@ -1187,6 +1190,7 @@
   function cacheGeneratedImage(img) {
     if (!window.AndroidBridge || !window.AndroidBridge.cacheImageToApp) return;
     if (!img || !img.dataset || img.dataset.comfy !== '1' || img.dataset.cached) return;
+    if (String(img.src || '').indexOf('data:image/gif;base64,R0lGODlhAQAB') === 0) return; // 占位图不缓存
     img.dataset.cached = '1';
     const orig = img.dataset.save || '';
     const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(orig);
@@ -1238,13 +1242,18 @@
 
   // 图片渲染失败/中继取不到时恢复：先查 App 缓存（file://），再分片取 dataURL，失败自动重试
   function resolveComfyImg(img) {
+    if (!relayCfg) return; // 局域网直链正常显示，不介入、不替换
     githubImageMode = readGithubImageMode(); // 设置页切换后立即生效
     const orig = img.dataset && img.dataset.save;
     if (String(orig).indexOf('/uploads/comfy-') !== 0) return;
     const m = /\/uploads\/(comfy-[^/?#]+)$/.exec(orig);
     if (!m) return;
     const cur = String(img.src || '');
-    if (cur.indexOf('data:') === 0 || cur.indexOf('file://') === 0) return; // 已取到
+    if (cur.indexOf('data:image/gif;base64,R0lGODlhAQAB') === 0) {
+      // 中继占位图不算“已取到”，继续取真图
+    } else if (cur.indexOf('data:') === 0 || cur.indexOf('file://') === 0) {
+      return; // 已取到
+    }
     if (String(cur).indexOf('https://github.com/') === 0) return; // 已用 GitHub 直链
     const map = loadComfyImgCache();
     if (map[m[1]]) {
