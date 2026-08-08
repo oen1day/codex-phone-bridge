@@ -12,7 +12,7 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.58';
+  const APP_VERSION = '10.59';
   const MAX_FILE_BYTES = 2 * 1024 * 1024;
   const RELAY_MAX_FILE_BYTES = 512 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
@@ -1149,7 +1149,33 @@
 
   // 中继模式取不到 /uploads 图片：分片文件协议拉取（meta+index，每片独立 RPC，原图字节不变）
   // 返回 dataURL 字符串；文件已被清理返回 'FILE_GONE'；失败返回 null
+  const comfyDataFetchCache = new Map(); // path -> 进行中的拉取 Promise（并发去重）
+  const comfyDataResultCache = new Map(); // path -> { ts, dataUrl }（30 分钟结果缓存，最多 50 条）
+  function comfyResultGet(path) {
+    const it = comfyDataResultCache.get(path);
+    if (it && Date.now() - it.ts < 30 * 60 * 1000) return it.dataUrl;
+    if (it) comfyDataResultCache.delete(path);
+    return null;
+  }
   async function fetchComfyDataUrl(path) {
+    const hit = comfyResultGet(path);
+    if (hit !== null) return hit;
+    if (comfyDataFetchCache.has(path)) return comfyDataFetchCache.get(path);
+    const p = doFetchComfyData(path);
+    comfyDataFetchCache.set(path, p);
+    p.then(res => {
+      comfyDataFetchCache.delete(path);
+      if (res && typeof res === 'string' && res !== 'FILE_GONE') {
+        comfyDataResultCache.set(path, { ts: Date.now(), dataUrl: res });
+        if (comfyDataResultCache.size > 50) {
+          const oldest = comfyDataResultCache.keys().next().value;
+          comfyDataResultCache.delete(oldest);
+        }
+      }
+    }).catch(() => comfyDataFetchCache.delete(path));
+    return p;
+  }
+  async function doFetchComfyData(path) {
     const meta = await apiCall('comfyImage', { path, meta: true }, 30000);
     if (!meta) return null;
     if (meta.gone) return 'FILE_GONE';
@@ -1157,7 +1183,7 @@
     const parts = new Array(meta.chunkCount);
     const queue = [];
     for (let i = 0; i < meta.chunkCount; i++) queue.push(i);
-    const workers = Math.min(4, meta.chunkCount);
+    const workers = Math.min(8, meta.chunkCount); // 并发 8 路，缩短大图等待
     async function worker() {
       while (queue.length) {
         const idx = queue.shift();
@@ -1275,7 +1301,7 @@
         return;
       }
       retryFetchComfyData(img, path, 0); // GitHub 不可用/未登录：回退中继分片
-    });
+    }).catch(() => retryFetchComfyData(img, path, 0)); // 请求异常同样回退中继分片
   }
 
   function retryFetchComfyData(img, path, attempt) {

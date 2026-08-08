@@ -230,6 +230,8 @@ check('Java GitHub 图片开关', java.includes('KEY_GITHUB_IMG') && java.includ
 check('app GitHub 图片模式', app.includes('function readGithubImageMode(') && app.includes('githubFetchComfy(') && app.includes('github: true') && app.includes('githubImageMode'));
 check('app 局域网不介入取图', app.includes('if (!relayCfg) return; // 局域网直链正常显示') && app.includes('仅中继模式主动取图'));
 check('app 中继占位图不算已取到', app.includes('中继占位图不算') && app.includes('占位图不缓存'));
+check('app GitHub 失败回退中继', app.includes('}).catch(() => retryFetchComfyData(img, path, 0));'));
+check('app 取图并发 8 + 结果缓存', app.includes('Math.min(8, meta.chunkCount)') && app.includes('comfyDataResultCache') && app.includes('function comfyResultGet('));
 check('autoSpeak 跳过诊断日志', app.includes("[autoSpeak] 跳过:") && app.includes('[autoSpeak] 跳过: 没有 AI 消息') && app.includes('[autoSpeak] 跳过: 本轮没有新回复'));
 check('autoSpeak 回合基线双向设置', (app.match(/turnStartLastMsgId = currentLastMsgId\(\);/g) || []).length >= 2);
 check('多次生图确认弹窗', app.includes('function showConfirmDialog(') && app.includes('是否确认继续生成') && app.includes('genConfirmApproved'));
