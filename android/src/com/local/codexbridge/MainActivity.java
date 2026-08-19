@@ -76,6 +76,7 @@ public class MainActivity extends Activity {
     private static final String KEY_PASSWORD = "relay_password";
     private static final String KEY_UPDATE_URL = "update_url";
     private static final String KEY_EFFORT = "effort";
+    private static final String KEY_SMART_EFFORT = "smart_effort";
     private static final String KEY_AUTO_SPEAK = "auto_speak";
     private static final String KEY_TTS_ENABLED = "tts_enabled";
     private static final String KEY_GITHUB_IMG = "github_img";
@@ -83,7 +84,7 @@ public class MainActivity extends Activity {
     private static final String KEY_CAP_IMAGE_GEN = "cap_image_gen";
     private static final String KEY_BROKER = "broker";
     private static final String RELAY_BROKER = "wss://broker.emqx.io:8084/mqtt";
-    private static final String APP_VERSION = "10.59";
+    private static final String APP_VERSION = "10.61";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private ValueCallback<Uri[]> fileChooserCallback;
     private String pendingKey = "";
@@ -154,6 +155,7 @@ public class MainActivity extends Activity {
                 o.put("roomCode", p.getString(KEY_ROOM, ""));
                 o.put("password", p.getString(KEY_PASSWORD, ""));
                 o.put("effort", p.getString(KEY_EFFORT, "medium"));
+                o.put("smartEffort", p.getBoolean(KEY_SMART_EFFORT, false));
                 o.put("autoSpeak", p.getBoolean(KEY_AUTO_SPEAK, true));
                 o.put("ttsEnabled", p.getBoolean(KEY_TTS_ENABLED, true));
                 o.put("broker", p.getString(KEY_BROKER, RELAY_BROKER));
@@ -167,6 +169,12 @@ public class MainActivity extends Activity {
         public String getEffort() {
             SharedPreferences p = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             return p.getString(KEY_EFFORT, "medium");
+        }
+
+        @JavascriptInterface
+        public boolean getSmartEffort() {
+            SharedPreferences p = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            return p.getBoolean(KEY_SMART_EFFORT, false);
         }
 
         @JavascriptInterface
@@ -214,6 +222,7 @@ public class MainActivity extends Activity {
                 SharedPreferences.Editor e = getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
                 if (o.has("device_status")) e.putBoolean(KEY_CAP_DEVICE_STATUS, o.optBoolean("device_status"));
                 if (o.has("image_generation")) e.putBoolean(KEY_CAP_IMAGE_GEN, o.optBoolean("image_generation"));
+                if (o.has("smart_effort")) e.putBoolean(KEY_SMART_EFFORT, o.optBoolean("smart_effort"));
                 e.apply();
             } catch (Exception ignored) {}
         }
@@ -925,6 +934,19 @@ public class MainActivity extends Activity {
         effortSpinner.setSelection(effortSel);
         root.addView(effortSpinner, lp());
 
+        final CheckBox smartEffortBox = new CheckBox(this);
+        smartEffortBox.setText("智能切换推理强度（按问题自动选档，省 token）");
+        smartEffortBox.setTextColor(Color.parseColor("#E6EDF3"));
+        boolean curSmart = initial != null && initial.length > 12 && "true".equalsIgnoreCase(initial[12]);
+        smartEffortBox.setChecked(curSmart);
+        root.addView(smartEffortBox, lp());
+        effortSpinner.setEnabled(!curSmart);
+        smartEffortBox.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
+                effortSpinner.setEnabled(!checked);
+            }
+        });
+
         final TextView ttsLabel = new TextView(this);
         ttsLabel.setText("语音服务");
         ttsLabel.setTextColor(Color.parseColor("#00D2A0"));
@@ -1063,6 +1085,7 @@ public class MainActivity extends Activity {
                     finishSave(mode[0], url, room, pw,
                             updateInput.getText().toString().trim(),
                             effortValues[effortSpinner.getSelectedItemPosition()],
+                            smartEffortBox.isChecked(),
                             ttsBox.isChecked(), autoSpeakBox.isChecked(), capDeviceBox.isChecked(),
                             capComfyBox.isChecked(), githubBox.isChecked(), brokerInput.getText().toString().trim(), dialogToDismiss);
                     return;
@@ -1073,6 +1096,7 @@ public class MainActivity extends Activity {
                 }
                 final String lanUrl = url;
                 final String lanEffort = effortValues[effortSpinner.getSelectedItemPosition()];
+                final boolean lanSmartEffort = smartEffortBox.isChecked();
                 final boolean lanTtsEnabled = ttsBox.isChecked();
                 final boolean lanAutoSpeak = autoSpeakBox.isChecked();
                 final boolean lanCapDevice = capDeviceBox.isChecked();
@@ -1096,7 +1120,7 @@ public class MainActivity extends Activity {
                                     return;
                                 }
                                 finishSave(mode[0], lanUrl, room, pw, lanUpdateUrl,
-                                        lanEffort, lanTtsEnabled, lanAutoSpeak, lanCapDevice, lanCapComfy, lanGithub, lanBroker, dialogToDismiss);
+                                        lanEffort, lanSmartEffort, lanTtsEnabled, lanAutoSpeak, lanCapDevice, lanCapComfy, lanGithub, lanBroker, dialogToDismiss);
                             }
                         });
                     }
@@ -1478,7 +1502,7 @@ public class MainActivity extends Activity {
     }
 
     private void finishSave(String mode, String url, String room, String pw, String updateUrl,
-                            String effort, boolean ttsEnabled, boolean autoSpeak, boolean capDevice, boolean capComfy, boolean githubImg, String broker, AlertDialog dlg) {
+                            String effort, boolean smartEffort, boolean ttsEnabled, boolean autoSpeak, boolean capDevice, boolean capComfy, boolean githubImg, String broker, AlertDialog dlg) {
         SharedPreferences.Editor e = getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
         if (!ttsEnabled) autoSpeak = false; // 关闭生成语音服务时，自动朗读联动关闭
         e.putString(KEY_MODE, mode);
@@ -1487,6 +1511,7 @@ public class MainActivity extends Activity {
         e.putString(KEY_PASSWORD, pw);
         e.putString(KEY_UPDATE_URL, updateUrl);
         e.putString(KEY_EFFORT, effort);
+        e.putBoolean(KEY_SMART_EFFORT, smartEffort);
         e.putBoolean(KEY_TTS_ENABLED, ttsEnabled);
         e.putBoolean(KEY_AUTO_SPEAK, autoSpeak);
         e.putBoolean(KEY_CAP_DEVICE_STATUS, capDevice);
@@ -1531,7 +1556,8 @@ public class MainActivity extends Activity {
                 String.valueOf(prefs.getBoolean(KEY_CAP_DEVICE_STATUS, false)),
                 String.valueOf(prefs.getBoolean(KEY_CAP_IMAGE_GEN, false)),
                 String.valueOf(prefs.getBoolean(KEY_TTS_ENABLED, true)),
-                String.valueOf(prefs.getBoolean(KEY_GITHUB_IMG, false))
+                String.valueOf(prefs.getBoolean(KEY_GITHUB_IMG, false)),
+                String.valueOf(prefs.getBoolean(KEY_SMART_EFFORT, false))
         };
         final AlertDialog dlg = new AlertDialog.Builder(this)
                 .setTitle("连接设置")

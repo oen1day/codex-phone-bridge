@@ -17,13 +17,14 @@ if (-not $node) {
 }
 
 $codex = $null
-$cmd2 = Get-Command codex -ErrorAction SilentlyContinue
-if ($cmd2) { $codex = $cmd2.Source }
-if (-not $codex) {
-  $codex = Find-LatestFile "$env:LOCALAPPDATA\OpenAI\Codex\bin\*\codex.exe"
-}
+# 优先使用命令行版 codex（WindowsApps 打包版不能由外部进程直接启动）
+$codex = Find-LatestFile "$env:LOCALAPPDATA\OpenAI\Codex\bin\*\codex.exe"
 if (-not $codex) {
   $codex = Find-LatestFile "$env:USERPROFILE\.codex\bin\codex.exe"
+}
+if (-not $codex) {
+  $cmd2 = Get-Command codex -ErrorAction SilentlyContinue
+  if ($cmd2 -and $cmd2.Source -notlike '*WindowsApps*') { $codex = $cmd2.Source }
 }
 
 if (-not $node) {

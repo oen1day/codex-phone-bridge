@@ -16,7 +16,9 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 const UPLOAD_DIR = path.join(ROOT, 'uploads');
 const TTS_DIR = path.join(UPLOAD_DIR, 'tts');
 const TEXT_FILE_EXTS = new Set(['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties']);
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
+// 办公文档附件（手机上传方向）：Excel / Word / PPT / PDF，服务端用 Python 提取文本
+const DOC_FILE_EXTS = new Set(['.xlsx', '.xlsm', '.xls', '.docx', '.doc', '.pptx', '.ppt', '.pdf']);
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILE_TEXT_CHARS = 200 * 1024;
 const SYSTEM_REQUIREMENT = '[系统要求：请始终使用简体中文回复用户。生成或修改 Word/PPT/PDF/Excel 等文件后，必须调用 publish_file 工具把文件发布为下载链接，并在回复末尾用文件下载语法展示：📄 [文件名](链接)。]';
 const PUB_FILE_EXTS = new Set(['.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.pdf', '.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.zip', '.apk']);
@@ -135,6 +137,7 @@ function loadConfig() {
     comfyFirebaseRefreshToken: '',
     openaiApiKey: '',
     imageProvider: 'comfy',
+    smartEffort: false,
     httpsProxy: '',
     githubImgRetentionCount: 200,
     autoCleanThreads: true,
@@ -157,7 +160,7 @@ function loadConfig() {
 }
 
 const config = loadConfig();
-const VERSION = '10.59';
+const VERSION = '10.61';
 
 // ---------- 全局代理：node 的 fetch 不读系统代理，需要手动挂 undici ----------
 try {
@@ -1344,7 +1347,6 @@ const COMFY_WORKFLOWS = {
   upscale: 'flux2_upscale_api.json'
 };
 
-const COMFY_FIREBASE_API_KEY = 'AIzaSyC2-fomLqgCjb7ELwta1I9cEarPK8ziTGs';
 let comfyIdTokenCache = { token: null, expiresAt: 0 };
 
 // Comfy Org 谷歌登录用的是 Firebase ID Token（约 1 小时有效）；
@@ -1356,7 +1358,9 @@ async function getComfyAuthToken() {
       return comfyIdTokenCache.token;
     }
     try {
-      const r = await fetch('https://securetoken.googleapis.com/v1/token?key=' + COMFY_FIREBASE_API_KEY, {
+      const firebaseKey = (config.comfyFirebaseApiKey || '').trim();
+      if (!firebaseKey) throw new Error('未配置 comfyFirebaseApiKey');
+      const r = await fetch('https://securetoken.googleapis.com/v1/token?key=' + firebaseKey, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: config.comfyFirebaseRefreshToken })
@@ -1953,6 +1957,18 @@ async function pruneOldThreads() {
 }
 setInterval(pruneOldThreads, 24 * 60 * 60 * 1000); // 每天一次
 
+// 智能推理强度：按问题复杂度自动选档，规则偏保守，不确定一律 medium
+function classifyEffort(text) {
+  const t = String(text || '').trim();
+  const len = t.length;
+  if (/深度|仔细想|认真想|深入分析|最复杂|多想想/.test(t)) return 'max';
+  if (/^(你好|您好|hi|hello|哈喽|谢谢|感谢|再见|拜拜|晚安|早安|在吗|哈哈|嗯|哦|好的|对|是|ok|okay)/i.test(t) && len < 40) return 'low';
+  if (len > 800) return 'high';
+  if (/代码|报错|错误|error|bug|调试|debug|修复|重构|架构|算法|数学|证明|优化|性能|文件|命令|脚本|部署|docker|git|正则|压测|测试|自动化|agent|帮我写|实现|设计|方案|分析|总结|配置|搭建|卡顿|怎么弄|怎么做/.test(t)) return 'high';
+  if (/翻译|改写|润色|换个说法|简单解释|科普/.test(t) && len < 120) return 'low';
+  return 'medium';
+}
+
 async function apiDispatch(method, params, clientId) {
   const c = await getClient();
   switch (method) {
@@ -2051,13 +2067,19 @@ async function apiDispatch(method, params, clientId) {
       for (const f of (body.files || [])) {
         const file = saveUploadFile(f.data, f.name);
         const label = f.name || path.basename(file);
-        const content = readUploadedText(file);
+        const content = await readUploadedContent(file, label);
         input.push({ type: 'text', text: '【附件：' + label + '】\n' + content });
       }
       if (!input.length) throw new Error('没有内容');
       const tp = { threadId, input };
       if (body.cwd || config.workspace) tp.cwd = body.cwd || config.workspace;
-      if (body.effort) tp.effort = String(body.effort);
+      const wantSmart = String(body.effort || '') === 'auto' || (config.smartEffort === true && !body.effort);
+      if (wantSmart) {
+        tp.effort = classifyEffort(userText);
+        console.log('[codex] 智能推理: ' + tp.effort + (body.effort ? '（手机端 auto）' : ''));
+      } else if (body.effort) {
+        tp.effort = String(body.effort);
+      }
       let result;
       try {
         result = await c.call('turn/start', tp);
@@ -2065,6 +2087,7 @@ async function apiDispatch(method, params, clientId) {
         const emsg = (e && e.message) || '';
         if (/thread not found/i.test(emsg)) {
           console.log('[codex] 线程未加载，正在恢复线程: ' + threadId);
+          let resumeFailed = null;
           try {
             await c.call('thread/resume', { threadId });
           } catch (e2) {
@@ -2073,9 +2096,20 @@ async function apiDispatch(method, params, clientId) {
               console.log('[codex] 空线程（尚无轮次），继续发起回合: ' + threadId);
             } else {
               console.error('[codex] 恢复线程失败: ' + e2msg);
+              resumeFailed = e2msg;
             }
           }
-          result = await c.call('turn/start', tp);
+          try {
+            result = await c.call('turn/start', tp);
+          } catch (e3) {
+            if (resumeFailed && /active writer/i.test(resumeFailed)) {
+              throw new Error('该对话正在电脑端使用中，请稍后再试（或换一个未在电脑端打开的对话）');
+            }
+            if (resumeFailed) {
+              throw new Error('会话恢复失败: ' + resumeFailed);
+            }
+            throw e3;
+          }
         } else {
           throw e;
         }
@@ -2411,14 +2445,14 @@ function saveUpload(base64, name) {
 
 function saveUploadFile(base64, name) {
   const ext = (path.extname(name || '').toLowerCase());
-  if (!TEXT_FILE_EXTS.has(ext)) {
-    throw new Error('不支持的文件类型：' + (name || '') + '（仅支持文本类文件：txt/md/json/csv/代码等）');
+  if (!TEXT_FILE_EXTS.has(ext) && !DOC_FILE_EXTS.has(ext)) {
+    throw new Error('不支持的文件类型：' + (name || '') + '（支持文本类及 Excel/Word/PPT/PDF 文档）');
   }
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   const m = /^data:([^;]+);base64,(.*)$/s.exec(base64 || '');
   const data = m ? Buffer.from(m[2], 'base64') : Buffer.from(base64 || '', 'base64');
   if (!data.length) throw new Error('文件内容为空');
-  if (data.length > MAX_FILE_BYTES) throw new Error('文件过大：单文件上限 2MB');
+  if (data.length > MAX_FILE_BYTES) throw new Error('文件过大：单文件上限 20MB');
   const id = crypto.randomBytes(8).toString('hex');
   const file = path.join(UPLOAD_DIR, 'upload-' + id + ext);
   fs.writeFileSync(file, data);
@@ -2432,6 +2466,56 @@ function readUploadedText(file) {
     raw = raw.slice(0, MAX_FILE_TEXT_CHARS) + '\n...（文件内容过长，已截断显示）';
   }
   return raw;
+}
+
+// 办公文档文本提取：调用桥接仓库独立 venv 中的 Python 解析器
+let docPythonCache = null;
+function findDocPython() {
+  if (docPythonCache) return docPythonCache;
+  const candidates = [
+    path.join(ROOT, '.venv', 'Scripts', 'python.exe'),
+    'E:\\NewComfyUi\\.venv\\Scripts\\python.exe'
+  ];
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) { docPythonCache = c; return c; } } catch (_) {}
+  }
+  docPythonCache = 'python';
+  return docPythonCache;
+}
+
+function extractDocText(file, name) {
+  return new Promise((resolve) => {
+    const py = findDocPython();
+    const script = path.join(ROOT, 'scripts', 'extract_doc.py');
+    const { execFile } = require('child_process');
+    execFile(py, [script, file], {
+      timeout: 90 * 1000,
+      maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true,
+      encoding: 'utf8'
+    }, (err, stdout, stderr) => {
+      if (err) {
+        const msg = String(stderr || err.message || '').trim().slice(0, 300);
+        resolve('（附件 ' + (name || path.basename(file)) + ' 自动解析失败' + (msg ? '：' + msg : '') + '）');
+        return;
+      }
+      let text = String(stdout || '').trim();
+      if (!text) {
+        resolve('（附件 ' + (name || path.basename(file)) + ' 未提取到文本内容）');
+        return;
+      }
+      if (text.length > MAX_FILE_TEXT_CHARS) {
+        text = text.slice(0, MAX_FILE_TEXT_CHARS) + '\n...（文件内容过长，已截断显示）';
+      }
+      resolve(text);
+    });
+  });
+}
+
+async function readUploadedContent(file, name) {
+  const ext = path.extname(name || file).toLowerCase();
+  if (DOC_FILE_EXTS.has(ext)) return await extractDocText(file, name);
+  return readUploadedText(file);
 }
 
 function toWebPath(p) {

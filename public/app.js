@@ -12,10 +12,11 @@
   const metaLine = $('metaLine');
   const inputBox = $('inputBox');
 
-  const APP_VERSION = '10.59';
-  const MAX_FILE_BYTES = 2 * 1024 * 1024;
-  const RELAY_MAX_FILE_BYTES = 512 * 1024;
+  const APP_VERSION = '10.61';
+  const MAX_FILE_BYTES = 20 * 1024 * 1024;
+  const RELAY_MAX_FILE_BYTES = 5 * 1024 * 1024;
   const TEXT_FILE_EXTS = ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log', '.xml', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bat', '.cmd', '.ps1', '.toml', '.properties'];
+  const DOC_FILE_EXTS = ['.xlsx', '.xlsm', '.xls', '.docx', '.doc', '.pptx', '.ppt', '.pdf'];
   const EFFORT_LABELS = { minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高' };
   const STUCK_IDLE_SEC = 240;
   const STUCK_TOTAL_SEC = 600;
@@ -33,6 +34,12 @@
     try { currentEffort = window.AndroidBridge.getEffort() || 'medium'; } catch (_) {}
   }
   if (!EFFORT_LABELS[currentEffort]) currentEffort = 'medium';
+  let smartEffort = false;
+  if (relayCfg && relayCfg.smartEffort) {
+    smartEffort = !!relayCfg.smartEffort;
+  } else if (window.AndroidBridge && window.AndroidBridge.getSmartEffort) {
+    try { smartEffort = !!window.AndroidBridge.getSmartEffort(); } catch (_) {}
+  }
 
   function getPersistentDeviceId() {
     if (window.AndroidBridge && window.AndroidBridge.getDeviceId) {
@@ -479,7 +486,7 @@
     if (relayCfg) {
       loginView.classList.add('hidden');
       mainView.classList.remove('hidden');
-      metaLine.textContent = 'v' + APP_VERSION + ' ｜ 中继模式 ｜ 配对码: ' + relayCfg.roomCode + ' ｜ 推理: ' + (EFFORT_LABELS[currentEffort] || currentEffort);
+      metaLine.textContent = 'v' + APP_VERSION + ' ｜ 中继模式 ｜ 配对码: ' + relayCfg.roomCode + ' ｜ 推理: ' + (smartEffort ? '智能' : (EFFORT_LABELS[currentEffort] || currentEffort));
       $('reconnectBtn').classList.remove('hidden');
       await connectRelay();
       loadThreads();
@@ -2089,7 +2096,7 @@
         text: sendText,
         images: images.map(i => ({ name: i.name, data: i.dataUrl })),
         files: files.map(f => ({ name: f.name, data: f.data })),
-        effort: currentEffort,
+        effort: smartEffort ? 'auto' : currentEffort,
         autoSpeak: autoSpeak
       });
       const turn = data.turn || data;
@@ -2181,8 +2188,8 @@
     const limit = relayCfg ? RELAY_MAX_FILE_BYTES : MAX_FILE_BYTES;
     for (const f of files) {
       const ext = (f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
-      if (!TEXT_FILE_EXTS.includes(ext)) {
-        showToast('不支持的文件类型：' + f.name + '（仅支持文本类文件：txt/md/json/csv/代码等）', true);
+      if (!TEXT_FILE_EXTS.includes(ext) && !DOC_FILE_EXTS.includes(ext)) {
+        showToast('不支持的文件类型：' + f.name + '（支持文本类及 Excel/Word/PPT/PDF 文档）', true);
         continue;
       }
       if (f.size > limit) {
